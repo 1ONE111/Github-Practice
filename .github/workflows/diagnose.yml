@@ -1,0 +1,32 @@
+name: Diagnose (real Naver)
+
+# 실제 네이버 응답과 크롤러 결과를 로그로 확인하는 점검용 워크플로 (수동 실행)
+on:
+  workflow_dispatch:
+    inputs:
+      blog_ids:
+        description: "블로그 ID (공백으로 구분)"
+        required: true
+        default: "shriya punky85 alldaybunny"
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -r requirements.txt
+      - name: Diagnose
+        env:
+          NAVER_CRAWLER_HOME: ${{ runner.temp }}/nc-home
+          NAVER_CRAWLER_CHROME_ARGS: "--no-sandbox --disable-dev-shm-usage"
+        run: python tools/diagnose.py ${{ inputs.blog_ids }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: debug-html
+          path: ${{ runner.temp }}/nc-home/debug
+          if-no-files-found: ignore
