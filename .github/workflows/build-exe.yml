@@ -1,0 +1,42 @@
+name: Build Windows exe
+
+# 선택 사항: 로컬에서 build.bat 으로 만들어도 된다.
+# Actions 탭에서 수동 실행하거나 v* 태그를 올리면 exe 를 만든다 (태그면 Release 에도 첨부).
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: python -m pip install -r requirements-dev.txt
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+      - name: Build
+        run: python -m PyInstaller --noconfirm --clean NaverCrawler.spec
+      - name: Self test
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist\NaverCrawler.exe -ArgumentList '--selftest' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "selftest failed: $($p.ExitCode)" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NaverCrawler
+          path: dist/NaverCrawler.exe
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/NaverCrawler.exe --generate-notes
