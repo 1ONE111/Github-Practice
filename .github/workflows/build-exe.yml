@@ -1,9 +1,14 @@
 name: Build Windows exe
 
 # 선택 사항: 로컬에서 build.bat 으로 만들어도 된다.
-# Actions 탭에서 수동 실행하거나 v* 태그를 올리면 exe 를 만든다 (태그면 Release 에도 첨부).
+# Actions 탭에서 수동 실행(버전 입력 시 Release 생성)하거나 v* 태그를 올리면 exe 를 만든다.
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "릴리스 태그 (예: v2.0.0). 비우면 Artifacts 로만 exe 저장"
+        required: false
+        default: ""
   push:
     tags: ["v*"]
 
@@ -36,7 +41,8 @@ jobs:
           name: NaverCrawler
           path: dist/NaverCrawler.exe
       - name: Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.version != ''
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" dist/NaverCrawler.exe --generate-notes
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.version }}
+        run: gh release create "$env:TAG" dist/NaverCrawler.exe --target "${{ github.sha }}" --title "네이버 크롤러 $env:TAG" --generate-notes
