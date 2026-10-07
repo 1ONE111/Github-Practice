@@ -18,6 +18,13 @@ class NaverHttp:
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": DEFAULT_UA, "Accept-Language": "ko-KR,ko;q=0.9"})
 
+    def clone(self) -> "NaverHttp":
+        """같은 헤더 · 쿠키를 가진 새 세션 (스레드마다 하나씩)."""
+        other = NaverHttp(self.timeout)
+        other.session.headers.update(self.session.headers)
+        other.session.cookies.update(self.session.cookies)
+        return other
+
     def set_user_agent(self, ua: str | None) -> None:
         if ua:
             self.session.headers["User-Agent"] = ua
@@ -29,16 +36,19 @@ class NaverHttp:
             except (KeyError, TypeError):
                 continue
 
-    def get_text(self, url: str, referer: str | None = None) -> str | None:
+    def fetch(self, url: str, referer: str | None = None) -> tuple[int | None, str]:
+        """(상태 코드, 본문). 연결 실패면 (None, "")."""
         headers = {"Referer": referer} if referer else {}
         try:
             resp = self.session.get(url, headers=headers, timeout=self.timeout)
         except requests.RequestException:
-            return None
-        if resp.status_code != 200:
-            return None
+            return None, ""
         resp.encoding = resp.encoding or "utf-8"
-        return resp.text
+        return resp.status_code, resp.text
+
+    def get_text(self, url: str, referer: str | None = None) -> str | None:
+        status, text = self.fetch(url, referer)
+        return text if status == 200 else None
 
     def resolve(self, url: str) -> str | None:
         """naver.me 같은 단축 링크의 최종 주소."""

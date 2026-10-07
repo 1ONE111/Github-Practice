@@ -370,21 +370,28 @@ class TaskPage(QWidget):
 
     def job_started(self, total: int) -> None:
         self._total, self._done = total, 0
+        self._finished_ids: set[int] = set()
         self.progress.setRange(0, max(1, total))
         self.progress.setValue(0)
-        self.status_text.setText(f"크롬 준비 중… (0 / {total})")
+        self.status_text.setText(f"준비 중… (0 / {total})")
 
     def row_started(self, row_id: int) -> None:
         self.model.mark([row_id], STATUS_RUNNING)
         i = self.model.row_index(row_id)
         if i >= 0:
             self.table.scrollTo(self.proxy.mapFromSource(self.model.index(i, 0)))
-        self.status_text.setText(f"{self._done + 1} / {self._total} 수집 중…")
+        if row_id in getattr(self, "_finished_ids", set()):
+            self.status_text.setText(f"{self._done} / {self._total} · 빈 값 크롬으로 다시 확인 중…")
+        else:
+            self.status_text.setText(f"{self._done} / {self._total} 수집 중…")
 
     def row_finished(self, row_id: int, result: RowResult) -> None:
         self.model.apply(row_id, result)
-        self._done += 1
-        self.progress.setValue(self._done)
+        finished = getattr(self, "_finished_ids", set())
+        if row_id not in finished:  # 크롬 재확인으로 같은 행이 두 번 끝나도 진행률은 한 번만
+            finished.add(row_id)
+            self._done += 1
+            self.progress.setValue(self._done)
         self.refresh_summary()
 
     def job_finished(self, completed: bool, error: str) -> None:

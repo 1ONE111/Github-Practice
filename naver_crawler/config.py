@@ -35,9 +35,12 @@ def selectors_path() -> Path:
     return app_data_dir() / "selectors.json"
 
 
+SETTINGS_VERSION = 2
+
+
 @dataclass
 class Settings:
-    headless: bool = False          # 브라우저 창 숨기기
+    headless: bool = True           # 브라우저 창 숨기기 (로그인할 때만 창이 보임)
     keep_login: bool = True         # 전용 크롬 프로필에 로그인 유지
     request_delay: float = 1.0      # URL 사이 대기(초)
     page_timeout: int = 20          # 요소 대기 최대 시간(초)
@@ -46,7 +49,10 @@ class Settings:
     chromedriver_path: str = ""     # 비우면 Selenium Manager 가 자동으로 맞춤
     chrome_binary: str = ""         # 비우면 설치된 크롬 자동 탐색
     save_debug_html: bool = False   # 실패 시 페이지 HTML 저장
+    workers: int = 4                # 크롬 없이 처리하는 작업(블로그 정보)의 동시 처리 수
+    browser_fallback: bool = True   # 빠른 수집에서 빈 값만 크롬으로 다시 확인
     export_dir: str = ""
+    settings_version: int = SETTINGS_VERSION
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Settings":
@@ -65,6 +71,9 @@ class Settings:
                 values[key] = type(default)(value)
             except (TypeError, ValueError):
                 continue
+        if int(raw.get("settings_version", 1)) < 2:
+            values["headless"] = True  # 2.0.2: 크롬 창 숨김을 기본으로 바꿈 (예전 설정 파일도 한 번 전환)
+        values["settings_version"] = SETTINGS_VERSION
         return cls(**values)
 
     def save(self, path: Path | None = None) -> None:
