@@ -45,7 +45,7 @@ class SettingsDialog(QDialog):
         self.setMinimumWidth(520)
         self.settings = settings
 
-        self.headless = QCheckBox("크롬 창을 숨기고 실행 (로그인할 때는 자동으로 보임)")
+        self.headless = QCheckBox("크롬 창 숨기기 (권장 · 로그인할 때만 창이 보임)")
         self.headless.setChecked(settings.headless)
         self.keep_login = QCheckBox("로그인 유지 (크롤러 전용 크롬 프로필 사용)")
         self.keep_login.setChecked(settings.keep_login)
@@ -62,6 +62,13 @@ class SettingsDialog(QDialog):
         self.timeout.setSuffix(" 초")
         self.timeout.setValue(settings.page_timeout)
 
+        self.workers = QSpinBox()
+        self.workers.setRange(1, 8)
+        self.workers.setSuffix(" 개")
+        self.workers.setValue(settings.workers)
+        self.fallback = QCheckBox("빈 값이 생기면 크롬으로 다시 확인")
+        self.fallback.setChecked(settings.browser_fallback)
+
         self.driver = QLineEdit(settings.chromedriver_path)
         self.driver.setPlaceholderText("비워두면 크롬 버전에 맞춰 자동 설치")
         self.chrome = QLineEdit(settings.chrome_binary)
@@ -74,6 +81,8 @@ class SettingsDialog(QDialog):
         form.addRow(self.debug_html)
         form.addRow("URL 사이 대기", self.delay)
         form.addRow("페이지 최대 대기", self.timeout)
+        form.addRow("동시 처리 (블로그 정보)", self.workers)
+        form.addRow(self.fallback)
         form.addRow("ChromeDriver 경로", _path_row(self.driver, "chromedriver 선택", "chromedriver (chromedriver*)"))
         form.addRow("Chrome 경로", _path_row(self.chrome, "chrome 선택", "chrome (chrome*)"))
 
@@ -105,6 +114,8 @@ class SettingsDialog(QDialog):
         s.save_debug_html = self.debug_html.isChecked()
         s.request_delay = float(self.delay.value())
         s.page_timeout = int(self.timeout.value())
+        s.workers = int(self.workers.value())
+        s.browser_fallback = self.fallback.isChecked()
         s.chromedriver_path = self.driver.text().strip()
         s.chrome_binary = self.chrome.text().strip()
         return restart

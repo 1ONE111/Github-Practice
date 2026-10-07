@@ -150,6 +150,19 @@ def test_stop_event_cancels(engine):
     assert finished is False and seen == []
 
 
+def test_moved_blog_does_not_take_other_blogs_values(engine):
+    """PC 주소가 다른 블로그로 넘어가면 그 화면의 닉네임/블로그명을 쓰지 않는다."""
+    http = FakeHttp({"https://blog.naver.com/NVisitorgp4Ajax.nhn": widget_xml(5, 5, 5, 5, 5)})
+    (res,) = run(engine, "blog_info", ["https://blog.naver.com/movedblog"], http)
+    assert res.values.get("nickname") != "엉뚱한닉"
+    assert res.values.get("name") != "엉뚱한 블로그"
+
+
+def widget_xml(*counts):
+    rows = "".join(f'<visitorcnt id="2026100{i}" cnt="{c}"/>' for i, c in enumerate(counts, 1))
+    return f"<visitorcnts>{rows}</visitorcnts>"
+
+
 def test_browser_start_failure_stops_whole_job(tmp_path, monkeypatch):
     """크롬을 못 띄우면 URL 마다 실패를 쌓지 않고 첫 줄에서 바로 멈춘다."""
     from naver_crawler.browser import BrowserError

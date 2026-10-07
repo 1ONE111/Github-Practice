@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 import threading
 from urllib.parse import urlparse
 from dataclasses import dataclass, field
@@ -76,6 +77,7 @@ class TaskSpec:
     run: Callable[["Context", str], RowResult]
     notes: tuple[str, ...] = ()  # 엑셀 표 아래 '*' 주석
     sort_desc: str | None = None  # 이 열 기준 내림차순 정렬 (엑셀 · 수집 완료 후 표)
+    fast: Callable[["Context", str], RowResult] | None = None  # 크롬 없이 되는 빠른 수집 (동시 처리)
 
 
 class Context:
@@ -91,12 +93,22 @@ class Context:
         log: Callable[[str], None] = lambda msg: None,
     ):
         self.browser = browser
-        self.http = http
+        self._base_http = http
+        self._local = threading.local()  # 동시 처리 때 스레드마다 요청 세션을 따로 쓴다
         self.settings = settings
         self.selectors = selectors
         self.stop = stop
         self.log = log
         self._cookies_synced = False
+
+    @property
+    def http(self) -> NaverHttp:
+        if threading.current_thread() is threading.main_thread() or not hasattr(self._base_http, "clone"):
+            return self._base_http
+        local = getattr(self._local, "http", None)
+        if local is None:
+            local = self._local.http = self._base_http.clone()
+        return local
 
     def page(self) -> Page:
         return Page(self.browser.driver(), self.stop, self.settings.page_timeout)
@@ -107,12 +119,12 @@ class Context:
             self._cookies_synced = True
         return self.http.get_json(url, referer)
 
-    def expand(self, url: str) -> str:
+    def expand(self, url: str, allow_browser: bool = True) -> str:
         """naver.me 단축 링크면 실제 주소로 바꾼다 (요청 → 안 되면 브라우저로)."""
         if not urlparse(url).netloc.lower().endswith("naver.me"):
             return url
         final = self.http.resolve(url)
-        if not final:
+        if not final and allow_browser:
             page = self.page()
             page.open(url, [])
             page.wait_until(lambda: "naver.me" not in page.driver.current_url, timeout=8)
@@ -121,6 +133,16 @@ class Context:
             self.log(f"단축 링크 → {final}")
             return final
         return url
+
+    def api_fetch(self, url: str, referer: str) -> tuple[int | None, str]:
+        if not self._cookies_synced and self.browser.is_running():
+            self.http.load_cookies(self.browser.naver_cookies())
+            self._cookies_synced = True
+        fetch = getattr(self.http, "fetch", None)
+        if fetch is None:  # 테스트용 가짜 HTTP
+            text = self.http.get_text(url, referer)
+            return (200, text) if text is not None else (None, "")
+        return fetch(url, referer)
 
     def api_text(self, url: str, referer: str):
         if not self._cookies_synced and self.browser.is_running():
@@ -146,6 +168,20 @@ def finish(task: TaskSpec, values: dict, ctx: Context | None = None, page: Page 
         if saved:
             message += f" [HTML 저장: {saved.name}]"
     return RowResult(values, status, message)
+
+
+def merge_results(task: TaskSpec, first: RowResult, second: RowResult) -> RowResult:
+    """빠른 수집 결과(first)의 값을 우선하고, 빈 칸만 크롬 결과(second)로 채운다."""
+    if second.status == STATUS_CANCELLED:
+        return second
+    values = dict(second.values)
+    values.update({k: v for k, v in first.values.items() if v not in (None, "")})
+    if STATUS_NO_WIDGET in (first.status, second.status) and values.get("avg") in (None, ""):
+        return RowResult(values, STATUS_NO_WIDGET, first.message if first.status == STATUS_NO_WIDGET else second.message)
+    merged = finish(task, values)
+    if merged.status != STATUS_OK and second.message and second.message not in merged.message:
+        merged.message = f"{merged.message} · {second.message}" if merged.message else second.message
+    return merged
 
 
 def _first(*values):
@@ -450,6 +486,23 @@ def crawl_cafe_avg(ctx: Context, url: str) -> RowResult:
 # ================================================================ 4. 블로그 정보
 
 
+VISITOR_WIDGET_URL = "https://blog.naver.com/NVisitorgp4Ajax.nhn?blogId={blog_id}"
+
+
+def visitor_widget(ctx: Context, blog_id: str) -> tuple[str, list[tuple[str, int]]]:
+    """블로그 방문자 위젯 데이터. ('ok' | 'hidden' | 'error', [(날짜, 방문자수)…]).
+
+    위젯을 꺼둔 블로그는 네이버가 204(빈 응답)를 준다 → 'hidden'.
+    """
+    status, text = ctx.api_fetch(VISITOR_WIDGET_URL.format(blog_id=blog_id), f"https://blog.naver.com/{blog_id}")
+    counts = parse_visitor_counts(text)
+    if counts:
+        return "ok", counts
+    if status == 204 or (status == 200 and "visitorcnts" in text.lower()):
+        return "hidden", []
+    return "error", []
+
+
 def _visitor_counts(ctx: Context, blog_id: str, page: Page | None) -> list[tuple[str, int]]:
     """방문자 위젯이 꺼진 블로그는 빈 목록을 돌려준다 (예외로 전체 작업이 멈추지 않게)."""
     url = f"https://blog.naver.com/NVisitorgp4Ajax.nhn?blogId={blog_id}"
@@ -465,9 +518,14 @@ def _visitor_counts(ctx: Context, blog_id: str, page: Page | None) -> list[tuple
 
 BUDDY_KEYS = ["subscriberCount", "buddyCount", "neighborCount", "followerCount"]
 MOBILE_BLOG_APIS = (
-    "https://m.blog.naver.com/api/blogs/{blog_id}",
     "https://m.blog.naver.com/rego/BlogInfo.naver?blogId={blog_id}",
+    "https://m.blog.naver.com/api/blogs/{blog_id}",
 )
+_HTML_KEYS = {
+    "nickname": re.compile(r'"nickName"\s*:\s*"([^"]+)"'),
+    "name": re.compile(r'"blogName"\s*:\s*"([^"]+)"'),
+    "buddies": re.compile(r'"subscriberCount"\s*:\s*(\d+)'),
+}
 
 
 class _BlogApi:
@@ -525,6 +583,38 @@ def _buddy_count(ctx: Context, page: Page, sel: dict, api: _BlogApi) -> int | No
     return buddies
 
 
+def crawl_blog_info_fast(ctx: Context, url: str) -> RowResult:
+    """크롬 없이: 방문자 위젯(5일) + 모바일 블로그 정보(닉네임 · 블로그명 · 이웃수)."""
+    task = TASK_BY_ID["blog_info"]
+    ref = parse_blog_url(url)
+    if not ref.blog_id:
+        return RowResult({}, STATUS_FAIL, "주소에서 블로그 ID 를 찾지 못했습니다.")
+    blog_id = ref.blog_id
+    api = _BlogApi(ctx, blog_id)
+    nickname = api.find(["nickName", "nickname"])
+    name = api.find(["blogName"])
+    buddies = parse_count(api.find(BUDDY_KEYS))
+    if not nickname or not name or buddies is None:
+        status, html = ctx.api_fetch(f"https://m.blog.naver.com/{blog_id}", f"https://m.blog.naver.com/{blog_id}")
+        if status == 200 and html:
+            found = {k: (m.group(1) if (m := rx.search(html)) else None) for k, rx in _HTML_KEYS.items()}
+            nickname = _first(nickname, found["nickname"])
+            name = _first(name, found["name"])
+            buddies = _first(buddies, parse_count(found["buddies"]), buddy_count_from_text(html))
+
+    state, counts = visitor_widget(ctx, blog_id)
+    counts = counts[-5:]  # 최근 5일 (오늘 포함)
+    values = {
+        "name": name,
+        "nickname": nickname,
+        "avg": int(sum(c for _, c in counts) / len(counts)) if counts else None,
+        "buddies": buddies,
+    }
+    if state == "hidden" and (name or nickname):
+        return RowResult(values, STATUS_NO_WIDGET, "방문자 위젯이 없는 블로그 (엑셀 저장 시 자동 제외)")
+    return finish(task, values, note="방문자 위젯 응답 없음" if state == "error" else "")
+
+
 def crawl_blog_info(ctx: Context, url: str) -> RowResult:
     task = TASK_BY_ID["blog_info"]
     sel = ctx.selectors["blog_info"]
@@ -538,15 +628,14 @@ def crawl_blog_info(ctx: Context, url: str) -> RowResult:
     # 프로필 위젯이 없는 블로그도 있으므로 오래 붙잡지 않는다
     page.wait_until(lambda: page.text(sel["nickname"]) is not None, timeout=min(8, ctx.settings.page_timeout))
 
-    nickname = page.text(sel["nickname"])
-    name = _first(strip_suffixes(page.top_title(), BLOG_TITLE_SUFFIXES), page.text(sel["name"]))
-    if not nickname or not name:
-        for resp in page.captured_json():
-            nickname = _first(nickname, find_key(resp.data, ["nickName", "nickname"]))
-            name = _first(name, find_key(resp.data, ["blogName"]))
-    if not nickname or not name:
-        nickname = _first(nickname, api.find(["nickName", "nickname"]))
-        name = _first(name, api.find(["blogName"]))
+    # 아이디가 바뀌었거나 없어진 블로그는 PC 주소가 다른 페이지로 넘어간다 → 그 화면 값은 믿지 않는다
+    nickname = api.find(["nickName", "nickname"])
+    name = api.find(["blogName"])
+    if blog_id.lower() in page.driver.current_url.lower():
+        nickname = _first(nickname, page.text(sel["nickname"]))
+        name = _first(name, strip_suffixes(page.top_title(), BLOG_TITLE_SUFFIXES), page.text(sel["name"]))
+    else:
+        ctx.log(f"{blog_id}: PC 블로그 주소가 다른 페이지로 넘어가 화면 값은 쓰지 않습니다")
 
     buddies = _buddy_count(ctx, page, sel, api)
     counts = _visitor_counts(ctx, blog_id, page)[-5:]  # 최근 5일
@@ -699,6 +788,7 @@ TASKS: tuple[TaskSpec, ...] = (
             "* 일방문자수(5일 평균): 네이버 블로그 방문자 위젯 기준 최근 5일 평균 (오늘 포함)",
         ),
         sort_desc="buddies",
+        fast=crawl_blog_info_fast,
     ),
     TaskSpec(
         "blog_post",

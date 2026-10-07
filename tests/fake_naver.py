@@ -105,6 +105,10 @@ ROUTES: dict[tuple[str, str], tuple[str, str]] = {
         "모바일 블로그 : 네이버 블로그", '<iframe id="mainFrame" name="mainFrame" src="/PostList.naver?blogId=mobileblog"></iframe>')),
     ("m.blog.naver.com", "/mobileblog"): (HTML, page("모바일", "<div>모바일 블로그</div><p>31.9만명의 이웃</p>")),
     ("m.blog.naver.com", "/nowidget"): (HTML, page("모바일", "<p>12명의 이웃</p>")),
+    ("blog.naver.com", "/movedblog"): (HTML, page("이동", "<script>location.replace('/otherblog');</script>")),
+    ("blog.naver.com", "/otherblog"): (HTML, page(
+        "엉뚱한 블로그 : 네이버 블로그", '<iframe id="mainFrame" name="mainFrame" src="/PostList.naver?blogId=otherblog"></iframe>')),
+    ("blog.naver.com", "/PostList.naver?blogId=otherblog"): (HTML, page("list", '<strong id="nickNameArea">엉뚱한닉</strong>')),
     # ---- 블로그 포스팅
     ("blog.naver.com", "/PostView.naver"): (HTML, page(
         "포스팅 제목 : 네이버 블로그",
@@ -182,21 +186,25 @@ class FakeNaver:
 
 
 class FakeHttp:
-    """requests 대신 쓰는 가짜 HTTP. url 접두어 -> 응답 텍스트."""
+    """requests 대신 쓰는 가짜 HTTP. url 접두어 -> 응답 텍스트 또는 (상태 코드, 텍스트)."""
 
-    def __init__(self, responses: dict[str, str] | None = None):
+    def __init__(self, responses: dict | None = None):
         self.responses = responses or {}
         self.calls: list[str] = []
 
     def load_cookies(self, cookies):
         pass
 
-    def get_text(self, url, referer=None):
+    def fetch(self, url, referer=None):
         self.calls.append(url)
-        for prefix, text in self.responses.items():
+        for prefix, found in self.responses.items():
             if url.startswith(prefix):
-                return text
-        return None
+                return found if isinstance(found, tuple) else (200, found)
+        return None, ""
+
+    def get_text(self, url, referer=None):
+        status, text = self.fetch(url, referer)
+        return text if status == 200 else None
 
     def resolve(self, url):
         return None
