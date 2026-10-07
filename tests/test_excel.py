@@ -66,10 +66,10 @@ def test_multi_sheet_no_summary(tmp_path):
 def test_no_widget_blogs_are_excluded(tmp_path):
     task = TASK_BY_ID["blog_info"]
     rows = [
-        {"url": "https://blog.naver.com/a", "name": "A", "nickname": "a", "avg": 100, "today": 50, "status": "완료"},
-        {"url": "https://blog.naver.com/b", "name": "B", "nickname": "b", "avg": None, "today": None,
+        {"url": "https://blog.naver.com/a", "name": "A", "nickname": "a", "avg": 100, "buddies": 5868, "status": "완료"},
+        {"url": "https://blog.naver.com/b", "name": "B", "nickname": "b", "avg": None, "buddies": 12,
          "status": "위젯없음", "message": "방문자 위젯이 없는 블로그"},
-        {"url": "https://blog.naver.com/c", "name": "C", "nickname": "c", "avg": 300, "today": 10, "status": "완료"},
+        {"url": "https://blog.naver.com/c", "name": "C", "nickname": "c", "avg": 300, "buddies": 319000, "status": "완료"},
     ]
     sheet = SheetData(task.title, task.description, task.columns, rows, task.notes)
     wb = load_workbook(export_xlsx(tmp_path / "blog.xlsx", [sheet], WHEN))
@@ -77,12 +77,14 @@ def test_no_widget_blogs_are_excluded(tmp_path):
     ws = wb["블로그 정보"]
     assert ws.cell(TITLE_ROW, 2).value == "블로그 정보 (2)"
     headers = [ws.cell(HEADER_ROW, c).value for c in range(2, 10)]
-    assert headers == ["구분", "블로그명", "URL", "닉네임", "일방문자", "오늘 방문자", "블로그 ID", "비고"]
+    assert headers == ["구분", "블로그명", "URL", "닉네임", "5일 방문자수 평균", "이웃수", "블로그 ID", "비고"]
+    assert ws.cell(FIRST_DATA_ROW + 1, 7).value == 319000
     assert [ws.cell(r, 4).value for r in (FIRST_DATA_ROW, FIRST_DATA_ROW + 1)] == [
         "https://blog.naver.com/a", "https://blog.naver.com/c"]
-    notes = [ws.cell(r, 2).value for r in range(FIRST_DATA_ROW + 3, FIRST_DATA_ROW + 6)]
-    assert notes[1].startswith("* 일방문자:")
-    assert "1건은 '제외 목록'" in notes[2]
+    notes = [ws.cell(r, 2).value for r in range(FIRST_DATA_ROW + 3, FIRST_DATA_ROW + 7)]
+    assert notes[1].startswith("* 5일 방문자수 평균:")
+    assert notes[2].startswith("* 이웃수:")
+    assert "1건은 '제외 목록'" in notes[3]
 
     excluded = wb["제외 목록"]
     assert excluded.cell(TITLE_ROW, 2).value == "제외 목록 (1)"

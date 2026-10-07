@@ -135,6 +135,15 @@ def test_club_id_from_html():
     assert club_id_from_html("nothing") is None
 
 
+def test_buddy_count_from_text():
+    from naver_crawler.parsing import buddy_count_from_text
+
+    assert buddy_count_from_text("블로그명\n31.9만명의 이웃") == 319000
+    assert buddy_count_from_text("서로이웃 23명 · 이웃 1,234명") == 1234
+    assert buddy_count_from_text("이웃추가") is None
+    assert buddy_count_from_text("서로이웃 23명") is None
+
+
 def test_strip_suffixes():
     assert strip_suffixes("내 블로그 : 네이버 블로그", [": 네이버 블로그"]) == "내 블로그"
     assert strip_suffixes("  ", [": 네이버 블로그"]) is None

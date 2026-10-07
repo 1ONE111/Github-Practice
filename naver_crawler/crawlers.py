@@ -23,6 +23,7 @@ from naver_crawler.http import NaverHttp
 from naver_crawler.parsing import (
     BlogRef,
     CafeRef,
+    buddy_count_from_text,
     club_id_from_html,
     find_dict,
     find_key,
@@ -461,12 +462,66 @@ def _visitor_counts(ctx: Context, blog_id: str, page: Page | None) -> list[tuple
     return counts
 
 
+BUDDY_KEYS = ["subscriberCount", "buddyCount", "neighborCount", "followerCount"]
+MOBILE_BLOG_APIS = (
+    "https://m.blog.naver.com/api/blogs/{blog_id}",
+    "https://m.blog.naver.com/rego/BlogInfo.naver?blogId={blog_id}",
+)
+
+
+class _BlogApi:
+    """모바일 블로그 정보 API 응답 (필요할 때 한 번만 요청)."""
+
+    def __init__(self, ctx: Context, blog_id: str):
+        self.ctx, self.blog_id = ctx, blog_id
+        self._data: list | None = None
+
+    def data(self) -> list:
+        if self._data is None:
+            self._data = []
+            for api in MOBILE_BLOG_APIS:
+                found = self.ctx.api_json(api.format(blog_id=self.blog_id), f"https://m.blog.naver.com/{self.blog_id}")
+                if found is not None:
+                    self._data.append(found)
+        return self._data
+
+    def find(self, keys: list[str]):
+        for data in self.data():
+            value = find_key(data, keys)
+            if value not in (None, ""):
+                return value
+        return None
+
+
 def _blog_profile_api(ctx: Context, blog_id: str) -> tuple[str | None, str | None]:
     """(블로그명, 닉네임) - 화면에서 못 찾았을 때 모바일 API 로."""
-    data = ctx.api_json(f"https://m.blog.naver.com/api/blogs/{blog_id}", f"https://m.blog.naver.com/{blog_id}")
-    if data is None:
-        return None, None
-    return find_key(data, ["blogName"]), find_key(data, ["nickName", "nickname"])
+    api = _BlogApi(ctx, blog_id)
+    return api.find(["blogName"]), api.find(["nickName", "nickname"])
+
+
+def _buddy_count(ctx: Context, page: Page, sel: dict, api: _BlogApi) -> int | None:
+    """이웃수: PC 화면 → 페이지 내부 JSON → 화면 글자 → 모바일 API → 모바일 블로그 화면."""
+    buddies = _count(page.text(sel.get("buddies", []), need_digit=True), ["이웃"])
+    if buddies is None:
+        for resp in page.captured_json():
+            buddies = _first(buddies, parse_count(find_key(resp.data, BUDDY_KEYS)))
+    if buddies is None:
+        buddies = _first(buddy_count_from_text(page.body_text()), buddy_count_from_text(page.top_body_text()))
+    if buddies is None:
+        buddies = parse_count(api.find(BUDDY_KEYS))
+    if buddies is None:
+        page.open(f"https://m.blog.naver.com/{api.blog_id}", [])
+
+        def mobile() -> int | None:
+            for resp in page.captured_json():
+                found = parse_count(find_key(resp.data, BUDDY_KEYS))
+                if found is not None:
+                    return found
+            return buddy_count_from_text(page.body_text())
+
+        page.wait_until(lambda: mobile() is not None, timeout=min(8, ctx.settings.page_timeout))
+        buddies = mobile()
+    return buddies
 
 
 def crawl_blog_info(ctx: Context, url: str) -> RowResult:
@@ -476,6 +531,7 @@ def crawl_blog_info(ctx: Context, url: str) -> RowResult:
     if not ref.blog_id:
         return RowResult({}, STATUS_FAIL, "주소에서 블로그 ID 를 찾지 못했습니다.")
     blog_id = ref.blog_id
+    api = _BlogApi(ctx, blog_id)
     page = ctx.page()
     page.open(f"https://blog.naver.com/{blog_id}", sel.get("frames", ["mainFrame"]))
     # 프로필 위젯이 없는 블로그도 있으므로 오래 붙잡지 않는다
@@ -488,15 +544,16 @@ def crawl_blog_info(ctx: Context, url: str) -> RowResult:
             nickname = _first(nickname, find_key(resp.data, ["nickName", "nickname"]))
             name = _first(name, find_key(resp.data, ["blogName"]))
     if not nickname or not name:
-        api_name, api_nick = _blog_profile_api(ctx, blog_id)
-        nickname, name = _first(nickname, api_nick), _first(name, api_name)
+        nickname = _first(nickname, api.find(["nickName", "nickname"]))
+        name = _first(name, api.find(["blogName"]))
 
-    counts = _visitor_counts(ctx, blog_id, page)
+    buddies = _buddy_count(ctx, page, sel, api)
+    counts = _visitor_counts(ctx, blog_id, page)[-5:]  # 최근 5일
     values = {
         "name": name,
         "nickname": nickname,
         "avg": int(sum(c for _, c in counts) / len(counts)) if counts else None,
-        "today": counts[-1][1] if counts else None,
+        "buddies": buddies,
         "blog_id": blog_id,
     }
     if not counts and (name or nickname):
@@ -627,17 +684,20 @@ TASKS: tuple[TaskSpec, ...] = (
     TaskSpec(
         "blog_info",
         "블로그 정보",
-        "블로그 주소로 블로그명 · 닉네임 · 일방문자(최근 5일 평균)를 가져옵니다.",
+        "블로그 주소로 블로그명 · 닉네임 · 5일 방문자수 평균 · 이웃수를 가져옵니다.",
         "https://blog.naver.com/블로그아이디\n한 줄에 하나씩 입력",
         (
             Column("name", "블로그명", width=26, required=True),
             Column("nickname", "닉네임", width=16, required=True),
-            Column("avg", "일방문자", "int", width=9, required=True),
-            Column("today", "오늘 방문자", "int", width=12),
+            Column("avg", "5일 방문자수 평균", "int", width=12, required=True),
+            Column("buddies", "이웃수", "int", width=9, required=True),
             Column("blog_id", "블로그 ID", width=16),
         ),
         crawl_blog_info,
-        ("* 일방문자: 네이버 블로그 방문자 위젯 기준 최근 5일 평균 (오늘 포함)",),
+        (
+            "* 5일 방문자수 평균: 네이버 블로그 방문자 위젯 기준 최근 5일 평균 (오늘 포함)",
+            "* 이웃수: 수집 시점 네이버 블로그 표시 기준",
+        ),
     ),
     TaskSpec(
         "blog_post",

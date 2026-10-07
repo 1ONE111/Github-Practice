@@ -302,6 +302,15 @@ class Page:
         except WebDriverException:
             return ""
 
+    def top_body_text(self) -> str:
+        try:
+            self.driver.switch_to.default_content()
+            return self.driver.execute_script("return document.body ? document.body.innerText : ''") or ""
+        except WebDriverException:
+            return ""
+        finally:
+            self.enter_frame()
+
     def title(self) -> str:
         try:
             return self.driver.execute_script("return document.title") or ""

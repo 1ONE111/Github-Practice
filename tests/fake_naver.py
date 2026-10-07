@@ -97,6 +97,14 @@ ROUTES: dict[tuple[str, str], tuple[str, str]] = {
         '<iframe id="mainFrame" name="mainFrame" src="/PostList.naver?blogId=nowidget"></iframe>',
     )),
     ("blog.naver.com", "/PostList.naver"): (HTML, page("list", '<strong id="nickNameArea">테스터</strong>')),
+    ("blog.naver.com", "/PostList.naver?blogId=tester"): (HTML, page(
+        "list", '<strong id="nickNameArea">테스터</strong><p>서로이웃 23명</p><p>이웃 1,234명</p>')),
+    ("blog.naver.com", "/apiblog"): (HTML, page(
+        "API 블로그 : 네이버 블로그", '<iframe id="mainFrame" name="mainFrame" src="/PostList.naver?blogId=apiblog"></iframe>')),
+    ("blog.naver.com", "/mobileblog"): (HTML, page(
+        "모바일 블로그 : 네이버 블로그", '<iframe id="mainFrame" name="mainFrame" src="/PostList.naver?blogId=mobileblog"></iframe>')),
+    ("m.blog.naver.com", "/mobileblog"): (HTML, page("모바일", "<div>모바일 블로그</div><p>31.9만명의 이웃</p>")),
+    ("m.blog.naver.com", "/nowidget"): (HTML, page("모바일", "<p>12명의 이웃</p>")),
     # ---- 블로그 포스팅
     ("blog.naver.com", "/PostView.naver"): (HTML, page(
         "포스팅 제목 : 네이버 블로그",
@@ -125,8 +133,8 @@ ROUTES: dict[tuple[str, str], tuple[str, str]] = {
 class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         host = (self.headers.get("Host") or "").split(":")[0]
-        path = urlparse(self.path).path
-        found = ROUTES.get((host, path))
+        parsed = urlparse(self.path)
+        found = ROUTES.get((host, f"{parsed.path}?{parsed.query}")) or ROUTES.get((host, parsed.path))
         if not found:
             self.send_response(404)
             self.end_headers()

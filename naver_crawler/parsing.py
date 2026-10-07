@@ -38,6 +38,21 @@ def regex_count(text: str | None, labels: Iterable[str]) -> int | None:
     return None
 
 
+_BUDDY_PATTERNS = (
+    re.compile(r"(\d[\d,]*(?:\.\d+)?\s*만?)\s*명의\s*이웃"),            # 31.9만명의 이웃
+    re.compile(r"(?<!서로)이웃\s*수?\s*[:：]?\s*(\d[\d,]*(?:\.\d+)?\s*만?)\s*명"),  # 이웃 1,234명
+)
+
+
+def buddy_count_from_text(text: str | None) -> int | None:
+    """블로그 화면 글자에서 이웃수를 읽는다. '서로이웃' 숫자는 무시."""
+    for pattern in _BUDDY_PATTERNS:
+        match = pattern.search(text or "")
+        if match:
+            return parse_count(match.group(1))
+    return None
+
+
 def normalize_url(raw: str) -> str | None:
     text = raw.strip().strip("\"'<>")
     if not text or text.startswith("#"):
