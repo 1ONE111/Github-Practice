@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
-from selenium import webdriver
 from selenium.common.exceptions import (
     NoSuchDriverException,
     SessionNotCreatedException,
@@ -25,6 +24,7 @@ from selenium.common.exceptions import (
 )
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.webdriver import WebDriver as Chrome  # 직접 import: exe 빌드에서 빠지지 않게
 from selenium.webdriver.common.by import By
 
 from naver_crawler.config import Settings, chrome_profile_dir
@@ -72,13 +72,13 @@ class BrowserManager:
     def __init__(self, settings: Settings, log: Callable[[str], None] | None = None):
         self.settings = settings
         self.log = log or (lambda msg: None)
-        self._driver: webdriver.Chrome | None = None
+        self._driver: Chrome | None = None
         self._headless: bool | None = None
         self._lock = threading.Lock()
         self.version_text = ""
 
     # ------------------------------------------------------------ 생명주기
-    def driver(self, force_visible: bool = False) -> webdriver.Chrome:
+    def driver(self, force_visible: bool = False) -> Chrome:
         want_headless = bool(self.settings.headless) and not force_visible
         with self._lock:
             if self._driver is not None:
@@ -112,7 +112,7 @@ class BrowserManager:
         except Exception:  # noqa: BLE001
             return False
 
-    def _create(self, headless: bool) -> webdriver.Chrome:
+    def _create(self, headless: bool) -> Chrome:
         opts = Options()
         if headless:
             opts.add_argument("--headless=new")
@@ -141,8 +141,8 @@ class BrowserManager:
 
         self.log("크롬을 시작합니다" + (" (창 숨김)" if headless else "") + "…")
         try:
-            drv = webdriver.Chrome(service=service, options=opts)
-        except WebDriverException as exc:
+            drv = Chrome(service=service, options=opts)
+        except Exception as exc:  # noqa: BLE001 - 크롬을 못 띄우면 어떤 오류든 작업 전체를 멈춘다
             raise BrowserError(friendly_error(exc)) from exc
         drv.set_page_load_timeout(max(30, self.settings.page_timeout + 15))
         caps = drv.capabilities
@@ -221,7 +221,7 @@ return [];
 class Page:
     """한 번의 페이지 방문 동안 프레임 전환, 요소 대기, 네트워크 응답 수집을 맡는다."""
 
-    def __init__(self, driver: webdriver.Chrome, stop: threading.Event, timeout: float):
+    def __init__(self, driver: Chrome, stop: threading.Event, timeout: float):
         self.driver = driver
         self.stop = stop
         self.timeout = timeout

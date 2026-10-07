@@ -48,7 +48,7 @@ class Engine:
             except BrowserError as exc:
                 on_result(key, RowResult({}, STATUS_FAIL, str(exc)))
                 self._log(f"[오류] {exc}")
-                return False
+                raise  # 크롬을 못 띄우면 나머지 URL 도 전부 실패하므로 바로 멈추고 알린다
             except Exception as exc:  # noqa: BLE001 - 한 URL 실패가 전체를 멈추지 않게
                 result = RowResult({}, STATUS_FAIL, friendly_error(exc))
             on_result(key, result)

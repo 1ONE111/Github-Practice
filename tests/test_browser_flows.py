@@ -148,3 +148,18 @@ def test_stop_event_cancels(engine):
     finished = engine.run(TASK_BY_ID["kin"], [(0, "https://kin.naver.com/qna/detail.naver")], stop,
                           on_start=seen.append)
     assert finished is False and seen == []
+
+
+def test_browser_start_failure_stops_whole_job(tmp_path, monkeypatch):
+    """크롬을 못 띄우면 URL 마다 실패를 쌓지 않고 첫 줄에서 바로 멈춘다."""
+    from naver_crawler.browser import BrowserError
+
+    monkeypatch.setenv("NAVER_CRAWLER_HOME", str(tmp_path))
+    eng = Engine(Settings(headless=True, keep_login=False, request_delay=0,
+                          chromedriver_path=str(tmp_path / "missing-chromedriver"), chrome_binary=CHROME))
+    eng.http = FakeHttp()
+    results = {}
+    with pytest.raises(BrowserError):
+        eng.run(TASK_BY_ID["kin"], [(0, "https://kin.naver.com/a"), (1, "https://kin.naver.com/b")],
+                threading.Event(), on_result=lambda k, r: results.__setitem__(k, r))
+    assert list(results) == [0] and results[0].status == "실패"

@@ -34,7 +34,10 @@ jobs:
       - name: Self test
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath dist\NaverCrawler.exe -ArgumentList '--selftest' -Wait -PassThru
+          # 러너에 설치된 크롬을 실제로 띄워 본다 (드라이버는 Selenium Manager 가 자동 설치)
+          $env:NAVER_CRAWLER_HOME = "$env:RUNNER_TEMP\nc-home"
+          $p = Start-Process -FilePath dist\NaverCrawler.exe -ArgumentList '--selftest','--browser' -Wait -PassThru
+          Get-Content "$env:NAVER_CRAWLER_HOME\selftest.log"
           if ($p.ExitCode -ne 0) { throw "selftest failed: $($p.ExitCode)" }
       - uses: actions/upload-artifact@v4
         with:
