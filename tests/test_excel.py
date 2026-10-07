@@ -63,27 +63,34 @@ def test_multi_sheet_no_summary(tmp_path):
     assert wb["지식iN"].cell(TITLE_ROW, 2).value == "지식iN (0)"
 
 
-def test_no_widget_blogs_are_excluded(tmp_path):
+def test_blog_sheet_order_sort_and_no_widget_exclusion(tmp_path):
     task = TASK_BY_ID["blog_info"]
     rows = [
         {"url": "https://blog.naver.com/a", "name": "A", "nickname": "a", "avg": 100, "buddies": 5868, "status": "완료"},
         {"url": "https://blog.naver.com/b", "name": "B", "nickname": "b", "avg": None, "buddies": 12,
          "status": "위젯없음", "message": "방문자 위젯이 없는 블로그"},
         {"url": "https://blog.naver.com/c", "name": "C", "nickname": "c", "avg": 300, "buddies": 319000, "status": "완료"},
+        {"url": "https://blog.naver.com/d", "name": "D", "nickname": "d", "avg": 50, "buddies": None,
+         "status": "일부 누락", "message": "누락: 이웃수"},
     ]
-    sheet = SheetData(task.title, task.description, task.columns, rows, task.notes)
+    sheet = SheetData(task.title, task.description, task.columns, rows, task.notes, task.sort_desc)
     wb = load_workbook(export_xlsx(tmp_path / "blog.xlsx", [sheet], WHEN))
     assert wb.sheetnames == ["블로그 정보", "제외 목록"]
     ws = wb["블로그 정보"]
-    assert ws.cell(TITLE_ROW, 2).value == "블로그 정보 (2)"
-    headers = [ws.cell(HEADER_ROW, c).value for c in range(2, 10)]
-    assert headers == ["구분", "블로그명", "URL", "닉네임", "5일 방문자수 평균", "이웃수", "블로그 ID", "비고"]
-    assert ws.cell(FIRST_DATA_ROW + 1, 7).value == 319000
-    assert [ws.cell(r, 4).value for r in (FIRST_DATA_ROW, FIRST_DATA_ROW + 1)] == [
-        "https://blog.naver.com/a", "https://blog.naver.com/c"]
-    notes = [ws.cell(r, 2).value for r in range(FIRST_DATA_ROW + 3, FIRST_DATA_ROW + 7)]
-    assert notes[1].startswith("* 5일 방문자수 평균:")
-    assert notes[2].startswith("* 이웃수:")
+    assert ws.cell(TITLE_ROW, 2).value == "블로그 정보 (3)"
+    headers = [ws.cell(HEADER_ROW, c).value for c in range(2, 9)]
+    assert headers == ["구분", "닉네임", "블로그명", "블로그링크", "이웃수", "일방문자수(5일 평균)", "비고"]
+    # 이웃 많은 순, 이웃수 없는 행은 맨 뒤, 구분은 정렬 후 1부터
+    body = [[ws.cell(r, c).value for c in range(2, 9)] for r in range(FIRST_DATA_ROW, FIRST_DATA_ROW + 3)]
+    assert body == [
+        [1, "c", "C", "https://blog.naver.com/c", 319000, 300, None],
+        [2, "a", "A", "https://blog.naver.com/a", 5868, 100, None],
+        [3, "d", "D", "https://blog.naver.com/d", "-", 50, "누락: 이웃수"],
+    ]
+    assert ws.cell(FIRST_DATA_ROW, 5).hyperlink.target == "https://blog.naver.com/c"
+    notes = [ws.cell(r, 2).value for r in range(FIRST_DATA_ROW + 4, FIRST_DATA_ROW + 8)]
+    assert notes[1].startswith("* 이웃수:")
+    assert notes[2].startswith("* 일방문자수(5일 평균):")
     assert "1건은 '제외 목록'" in notes[3]
 
     excluded = wb["제외 목록"]

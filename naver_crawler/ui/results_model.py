@@ -30,9 +30,10 @@ class ResultsModel(QAbstractTableModel):
     def __init__(self, task: TaskSpec, parent=None):
         super().__init__(parent)
         self.task = task
+        has_url = any(c.key == "url" for c in task.columns)
         self.columns: list[tuple[str, str, str]] = [
             ("_no", "No", "int"),
-            ("url", "URL", "text"),
+            *([] if has_url else [("url", "URL", "text")]),
             *[(c.key, c.header, c.kind) for c in task.columns],
             ("status", "상태", "text"),
             ("message", "비고", "text"),
@@ -187,4 +188,5 @@ class ResultsModel(QAbstractTableModel):
             {"url": r.url, "status": r.status, "message": r.message, **r.values}
             for r in self.rows
         ]
-        return SheetData(self.task.title, self.task.description, self.task.columns, rows, self.task.notes)
+        return SheetData(self.task.title, self.task.description, self.task.columns, rows, self.task.notes,
+                         self.task.sort_desc)

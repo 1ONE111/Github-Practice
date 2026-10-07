@@ -53,6 +53,7 @@ class SheetData:
     columns: Sequence[Column]                                   # 작업 결과 열 (구분/URL/비고는 자동 추가)
     rows: list[dict[str, Any]] = field(default_factory=list)   # {"url", "status", "message", <열 key>…}
     notes: Sequence[str] = ()                                   # 표 아래 '*' 주석
+    sort_desc: str | None = None                                # 이 열 큰 값부터 정렬 (값 없는 행은 맨 뒤)
 
 
 def split_excluded(rows: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -94,7 +95,9 @@ def _safe_sheet_title(title: str, used: set[str]) -> str:
 
 
 def _ordered_columns(columns: Sequence[Column]) -> list[Column]:
-    """구분 | 이름(첫 글자 열) | URL | 나머지 | 비고 순서."""
+    """구분 | 이름(첫 글자 열) | URL | 나머지 | 비고 순서. 작업이 URL 열 위치를 정했으면 그대로 따른다."""
+    if any(c.key == "url" for c in columns):
+        return [Column("_no", "구분", "int", width=6), *columns, Column("_note", "비고", width=40)]
     first_text = next((c for c in columns if c.kind == "text"), None)
     out = [Column("_no", "구분", "int", width=6)]
     if first_text is not None:
@@ -195,6 +198,9 @@ def build_workbook(sheets: list[SheetData], generated: dt.datetime | None = None
 
     for sheet in sheets:
         kept, dropped = split_excluded(sheet.rows)
+        if sheet.sort_desc:
+            key = sheet.sort_desc
+            kept = sorted(kept, key=lambda r: (not isinstance(r.get(key), (int, float)), -(r.get(key) or 0)))
         excluded += [(sheet.title, row) for row in dropped]
         notes = [f"* 수집일시: {generated:%Y-%m-%d %H:%M}", *sheet.notes]
         if dropped:

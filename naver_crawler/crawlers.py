@@ -75,6 +75,7 @@ class TaskSpec:
     columns: tuple[Column, ...]
     run: Callable[["Context", str], RowResult]
     notes: tuple[str, ...] = ()  # 엑셀 표 아래 '*' 주석
+    sort_desc: str | None = None  # 이 열 기준 내림차순 정렬 (엑셀 · 수집 완료 후 표)
 
 
 class Context:
@@ -554,7 +555,6 @@ def crawl_blog_info(ctx: Context, url: str) -> RowResult:
         "nickname": nickname,
         "avg": int(sum(c for _, c in counts) / len(counts)) if counts else None,
         "buddies": buddies,
-        "blog_id": blog_id,
     }
     if not counts and (name or nickname):
         return RowResult(values, STATUS_NO_WIDGET, "방문자 위젯이 없는 블로그 (엑셀 저장 시 자동 제외)")
@@ -684,20 +684,21 @@ TASKS: tuple[TaskSpec, ...] = (
     TaskSpec(
         "blog_info",
         "블로그 정보",
-        "블로그 주소로 블로그명 · 닉네임 · 5일 방문자수 평균 · 이웃수를 가져옵니다.",
+        "블로그 주소로 닉네임 · 블로그명 · 이웃수 · 일방문자수(5일 평균)를 가져옵니다. 이웃 많은 순 정렬.",
         "https://blog.naver.com/블로그아이디\n한 줄에 하나씩 입력",
         (
-            Column("name", "블로그명", width=26, required=True),
             Column("nickname", "닉네임", width=16, required=True),
-            Column("avg", "5일 방문자수 평균", "int", width=12, required=True),
+            Column("name", "블로그명", width=26, required=True),
+            Column("url", "블로그링크", width=34),
             Column("buddies", "이웃수", "int", width=9, required=True),
-            Column("blog_id", "블로그 ID", width=16),
+            Column("avg", "일방문자수(5일 평균)", "int", width=14, required=True),
         ),
         crawl_blog_info,
         (
-            "* 5일 방문자수 평균: 네이버 블로그 방문자 위젯 기준 최근 5일 평균 (오늘 포함)",
-            "* 이웃수: 수집 시점 네이버 블로그 표시 기준",
+            "* 이웃수: 수집 시점 네이버 블로그 표시 기준, 이웃 많은 순 정렬",
+            "* 일방문자수(5일 평균): 네이버 블로그 방문자 위젯 기준 최근 5일 평균 (오늘 포함)",
         ),
+        sort_desc="buddies",
     ),
     TaskSpec(
         "blog_post",

@@ -97,7 +97,7 @@ def test_blog_info_and_no_widget_does_not_stop(engine):
     assert no_widget.values["name"] == "위젯 없는 블로그"
     assert ok.status == "완료", ok.message
     # PC 화면의 '이웃 1,234명' (서로이웃 23명은 무시)
-    assert ok.values == {"name": "테스트 블로그", "nickname": "테스터", "avg": 30, "buddies": 1234, "blog_id": "tester"}
+    assert ok.values == {"name": "테스트 블로그", "nickname": "테스터", "avg": 30, "buddies": 1234}
 
 
 def test_blog_buddy_count_fallbacks(engine):

@@ -232,7 +232,9 @@ class TaskPage(QWidget):
         header.setMinimumSectionSize(40)
         header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         # URL 과 첫 텍스트 열(제목/카페명/블로그명)이 남는 폭을 나눠 쓰고, 숫자 열은 항상 보이게
-        stretch_keys = {"url", next((c.key for c in self.task.columns if c.kind == "text"), "url")}
+        text_keys = [c.key for c in self.task.columns if c.kind == "text" and c.key != "url"]
+        main_text = next((k for k in text_keys if k in ("title", "name")), text_keys[0] if text_keys else "url")
+        stretch_keys = {"url", main_text}
         hidden_keys = {"message", "club_id", "blog_id"}  # 표에서는 숨기고 엑셀에는 포함
         fm = header.fontMetrics()
         for i, (key, _h, kind) in enumerate(self.model.columns):
@@ -395,6 +397,13 @@ class TaskPage(QWidget):
         else:
             self.status_text.setText(f"중지됨 · {self._done} / {self._total}")
         self.refresh_summary()
+        self.apply_default_sort()
+
+    def apply_default_sort(self) -> None:
+        """작업에 정렬 기준이 있으면(블로그: 이웃수) 큰 값부터 정렬. 수집 중엔 행이 튀지 않게 끝난 뒤에만."""
+        keys = [k for k, _h, _kind in self.model.columns]
+        if self.task.sort_desc in keys:
+            self.table.sortByColumn(keys.index(self.task.sort_desc), Qt.SortOrder.DescendingOrder)
 
     def refresh_summary(self) -> None:
         c = self.model.counts()

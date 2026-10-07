@@ -94,6 +94,11 @@ def test_crawl_and_export_through_ui(qapp, tmp_path, monkeypatch):
         assert statuses == ["완료", "위젯없음", "완료"]
         assert page.model.rows[0].values["avg"] == 30
         assert "위젯없음 1" in page.summary.text()
+        # 수집이 끝나면 이웃수 많은 순으로 정렬 (테스터 1,234 > 위젯없음 블로그 12)
+        keys = [k for k, _h, _kind in page.model.columns]
+        assert keys[:6] == ["_no", "nickname", "name", "url", "buddies", "avg"]
+        shown = [page.proxy.index(r, keys.index("buddies")).data() for r in range(3)]
+        assert shown == ["1,234", "1,234", "12"]
         assert page.start_btn.isEnabled()
 
         # 카페 게시글 탭도 하나 채워 전체 저장 확인
