@@ -46,6 +46,9 @@ from insta_crawler import APP_NAME, __version__
 from insta_crawler.client import InstaClient
 from insta_crawler.collector import (
     COLUMNS,
+    MODE_FEED,
+    MODE_REELS,
+    MODES,
     RETRY_STATUSES,
     STATUS_CANCELLED,
     STATUS_FAIL,
@@ -57,12 +60,14 @@ from insta_crawler.collector import (
     RowResult,
     Runner,
     StopRun,
+    TITLES,
     notes,
 )
 from insta_crawler.config import Settings, chrome_profile_dir, clear_session, load_session, save_session
 from insta_crawler.files import SUPPORTED, default_filename, export_xlsx, read_links_text
-from insta_crawler.parsing import Target, parse_targets
-from insta_crawler.theme import BLACK, MUTED, StatChips, StatusDelegate, brand_mark_pixmap, icon
+from insta_crawler.parsing import Target, parse_targets, profile_url, reels_url
+from insta_crawler.theme import BLACK, MUTED, PILL_ROLE, StatChips, StatusDelegate, brand_mark_pixmap, icon
+
 
 def card(margins=(20, 18, 20, 18), spacing: int = 12) -> tuple[QFrame, QVBoxLayout]:
     frame = QFrame()
@@ -77,7 +82,6 @@ def card(margins=(20, 18, 20, 18), spacing: int = 12) -> tuple[QFrame, QVBoxLayo
 
 SORT_ROLE = Qt.ItemDataRole.UserRole + 1
 _ids = itertools.count(1)
-TABLE_COLUMNS = [c for c in COLUMNS if c.key not in ("url",)]  # 링크는 엑셀에만 (표는 아이디로 충분)
 
 
 @dataclass
@@ -88,16 +92,15 @@ class Row:
     message: str = ""
     values: dict[str, Any] = field(default_factory=dict)
 
-    def url(self) -> str:
-        return self.values.get("url") or (
-            f"https://www.instagram.com/{self.target.username}/" if self.target.username else self.target.raw
-        )
-
 
 class ResultsModel(QAbstractTableModel):
-    def __init__(self, parent=None):
+    """피드 · 릴스 기준마다 하나씩. 링크 열은 엑셀에만 넣는다 (표는 아이디로 충분)."""
+
+    def __init__(self, mode: str, parent=None):
         super().__init__(parent)
-        self.columns = [("_no", "No", "int"), *[(c.key, c.header, c.kind) for c in TABLE_COLUMNS],
+        self.mode = mode
+        self.n_posts = 5  # 마지막으로 수집할 때 쓴 게시물 수 (엑셀 주석용)
+        self.columns = [("_no", "No", "int"), *[(c.key, c.header, c.kind) for c in COLUMNS[mode] if c.key != "url"],
                         ("status", "상태", "text"), ("message", "비고", "text")]
         self.rows: list[Row] = []
         self._bold = QFont()
@@ -152,6 +155,8 @@ class ResultsModel(QAbstractTableModel):
             return QBrush(QColor(MUTED))
         if role == Qt.ItemDataRole.FontRole and kind == "int" and key != "_no" and isinstance(value, int):
             return self._bold
+        if role == PILL_ROLE:
+            return key == "status"
         if role == Qt.ItemDataRole.ToolTipRole:
             parts = [row.target.raw]
             if row.message:
@@ -211,8 +216,15 @@ class ResultsModel(QAbstractTableModel):
         rows = []
         for r in self.rows:
             username = r.values.get("username") or r.target.username or r.target.raw
-            rows.append({**r.values, "username": username, "url": r.url(), "status": r.status, "message": r.message})
+            rows.append({**r.values, "username": username, "url": self.url(r), "status": r.status, "message": r.message})
         return rows
+
+    def url(self, row: Row) -> str:
+        if row.values.get("url"):
+            return row.values["url"]
+        if row.target.username:
+            return (reels_url if self.mode == MODE_REELS else profile_url)(row.target.username)
+        return row.target.raw
 
     def tsv(self, rows: list[Row] | None = None) -> str:
         rows = self.rows if rows is None else rows
@@ -306,7 +318,9 @@ class MainWindow(QMainWindow):
     def __init__(self, settings: Settings):
         super().__init__()
         self.settings = settings
-        self.model = ResultsModel(self)
+        self.mode = settings.mode if settings.mode in MODES else MODE_FEED
+        self.models = {mode: ResultsModel(mode, self) for mode in MODES}
+        self.model = self.models[self.mode]
         self.proxy = QSortFilterProxyModel(self)
         self.proxy.setSourceModel(self.model)
         self.proxy.setSortRole(SORT_ROLE)
@@ -320,6 +334,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(980, 600)
         self.resize(1280, 780)
         self._build()
+        self.set_mode(self.mode)
         self.refresh_login()
         self._set_running(False)
         self._refresh_summary()
@@ -358,6 +373,24 @@ class MainWindow(QMainWindow):
         titles.addWidget(title)
         titles.addWidget(self.desc)
         head.addLayout(titles)
+        head.addSpacing(20)
+        self.mode_btns: dict[str, QPushButton] = {}
+        seg = QHBoxLayout()
+        seg.setSpacing(0)
+        for mode, text, side, tip in (
+            (MODE_FEED, "피드", "left", "피드 최신 게시물 기준: 평균 좋아요 · 댓글"),
+            (MODE_REELS, "릴스", "right", "릴스 최신 기준: 평균 조회수 · 좋아요 · 댓글 (엑셀 링크도 릴스 탭)"),
+        ):
+            btn = QPushButton(text)
+            btn.setObjectName("Seg")
+            btn.setProperty("side", side)  # 'pos' 는 QWidget 위치 속성이라 쓰면 안 됨
+            btn.setCheckable(True)
+            btn.setToolTip(tip)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _c=False, m=mode: self.set_mode(m))
+            seg.addWidget(btn)
+            self.mode_btns[mode] = btn
+        head.addLayout(seg)
         head.addStretch(1)
         self.login_state = QLabel()
         self.login_state.setObjectName("LoginState")
@@ -427,7 +460,7 @@ class MainWindow(QMainWindow):
         for n in range(1, 13):
             self.posts_box.addItem(f"{n}개", n)
         self.posts_box.setCurrentIndex(max(1, min(12, self.settings.posts)) - 1)
-        self.posts_box.currentIndexChanged.connect(lambda i: self._posts_changed(i + 1))
+        self.posts_box.currentIndexChanged.connect(lambda i: self._posts_changed())
         self.delay_box = QComboBox()
         delays = sorted({2.0, 3.0, 5.0, 10.0, float(self.settings.request_delay)})
         for d in delays:
@@ -437,7 +470,7 @@ class MainWindow(QMainWindow):
         self.delay_box.currentIndexChanged.connect(
             lambda _i: setattr(self.settings, "request_delay", float(self.delay_box.currentData()))
         )
-        for text, combo in (("최근 게시물", self.posts_box), ("간격", self.delay_box)):
+        for text, combo in (("최근", self.posts_box), ("간격", self.delay_box)):
             lab = QLabel(text)
             lab.setObjectName("OptionLabel")
             opts.addWidget(lab)
@@ -466,7 +499,7 @@ class MainWindow(QMainWindow):
         self.status_text.setObjectName("StatusText")
         lv.addWidget(self.progress)
         lv.addWidget(self.status_text)
-        self._posts_changed(self.posts_box.currentData())
+        self._posts_changed()
         return box
 
     def _build_results(self) -> QWidget:
@@ -520,12 +553,8 @@ class MainWindow(QMainWindow):
         header.setHighlightSections(False)
         header.setStretchLastSection(True)
         header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        widths = {"_no": 44, "username": 140, "name": 100, "followers": 90, "avg_views": 90, "videos": 60, "status": 96,
-                  "message": 80}
-        for i, (key, _h, kind) in enumerate(self.model.columns):
-            self.table.setColumnWidth(i, widths.get(key, 82 if kind == "int" else 120))
-        status_col = [k for k, _h, _kind in self.model.columns].index("status")
-        self.table.setItemDelegateForColumn(status_col, StatusDelegate(self.table))
+        self.table.setItemDelegate(StatusDelegate(self.table))  # 상태 칸만 알약으로 그린다
+        self._fit_columns()
         rv.addWidget(self.table, 1)
         return box
 
@@ -533,9 +562,32 @@ class MainWindow(QMainWindow):
     def _update_count(self) -> None:
         self.count_chip.setText(f"{len(parse_targets(self.edit.toPlainText()))}개")
 
-    def _posts_changed(self, value: int) -> None:
-        self.settings.posts = int(value)
-        self.desc.setText(f"프로필 링크로 팔로워 · 최근 {value}개 게시물 평균 좋아요 · 댓글 · 조회수(릴스)를 가져옵니다")
+    def _fit_columns(self) -> None:
+        widths = {"_no": 44, "username": 150, "name": 120, "followers": 96, "status": 96}
+        for i, (key, _h, kind) in enumerate(self.model.columns):
+            self.table.setColumnWidth(i, widths.get(key, 90 if kind == "int" else 120))
+
+    def set_mode(self, mode: str) -> None:
+        """피드 / 릴스 전환. 결과 표는 기준마다 따로 남아 있다."""
+        if self.busy:
+            mode = self.mode
+        for m, btn in self.mode_btns.items():
+            btn.setChecked(m == mode)
+        if self.proxy.sourceModel() is not self.models[mode]:
+            self.mode = self.settings.mode = mode
+            self.model = self.models[mode]
+            self.table.sortByColumn(-1, Qt.SortOrder.AscendingOrder)
+            self.proxy.setSourceModel(self.model)
+            self._fit_columns()
+        self._posts_changed()
+        self._refresh_summary()
+
+    def _posts_changed(self) -> None:
+        n = self.settings.posts = int(self.posts_box.currentData())
+        if self.mode == MODE_REELS:
+            self.desc.setText(f"프로필 링크로 팔로워 · 최근 릴스 {n}개 평균 조회수 · 좋아요 · 댓글을 가져옵니다")
+        else:
+            self.desc.setText(f"프로필 링크로 팔로워 · 피드 최근 {n}개 게시물 평균 좋아요 · 댓글을 가져옵니다")
 
     def _append_lines(self, lines: list[str]) -> None:
         current = self.edit.toPlainText().rstrip("\n")
@@ -565,7 +617,8 @@ class MainWindow(QMainWindow):
         if self.busy:
             return
         self.edit.clear()
-        self.model.set_targets([])
+        for model in self.models.values():
+            model.set_targets([])
         self._refresh_summary()
 
     def _open_file(self) -> None:
@@ -660,6 +713,8 @@ class MainWindow(QMainWindow):
 
     def _run(self, row_ids: list[int]) -> None:
         self.model.mark(row_ids, STATUS_WAIT)
+        self.model.n_posts = self.settings.posts
+        self.settings.mode = self.mode
         items = [(rid, self.model.find(rid)[1].target) for rid in row_ids]
         self.stop_event = threading.Event()
         runner = Runner(self.settings, InstaClient(load_session()))
@@ -712,7 +767,7 @@ class MainWindow(QMainWindow):
         self.start_btn.setVisible(not running or login)
         self.start_btn.setEnabled(not running)
         self.stop_btn.setVisible(running and not login)
-        for w in (self.retry_btn, self.export_btn, self.login_btn, self.posts_box, self.edit):
+        for w in (self.retry_btn, self.export_btn, self.login_btn, self.posts_box, self.edit, *self.mode_btns.values()):
             w.setEnabled(not running)
         self.progress.setVisible(running and not login)
 
@@ -732,7 +787,7 @@ class MainWindow(QMainWindow):
 
     def _open_profiles(self, rows: list[int]) -> None:
         for i in rows[:20]:
-            QDesktopServices.openUrl(QUrl(self.model.rows[i].url()))
+            QDesktopServices.openUrl(QUrl(self.model.url(self.model.rows[i])))
 
     def _context_menu(self, pos) -> None:
         rows = self._selected_rows()
@@ -763,11 +818,13 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("저장할 결과가 없습니다", 4000)
             return
         folder = self.settings.export_dir or QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DesktopLocation)
-        path, _ = QFileDialog.getSaveFileName(self, "엑셀 저장", str(Path(folder) / default_filename()), "Excel (*.xlsx)")
+        name = default_filename(MODES[self.mode])
+        path, _ = QFileDialog.getSaveFileName(self, "엑셀 저장", str(Path(folder) / name), "Excel (*.xlsx)")
         if not path:
             return
         try:
-            saved = export_xlsx(path, "인스타 계정 지표", COLUMNS, self.model.export_rows(), notes(self.settings.posts))
+            saved = export_xlsx(path, TITLES[self.mode], COLUMNS[self.mode], self.model.export_rows(),
+                                notes(self.mode, self.model.n_posts))
         except PermissionError:
             QMessageBox.warning(self, "저장 실패", "같은 이름 파일이 엑셀에서 열려 있으면 닫고 다시 저장하세요.")
             return

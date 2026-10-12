@@ -61,13 +61,18 @@ class InstaClient:
         return bool(self.session.cookies.get("sessionid"))
 
     # ------------------------------------------------------------ 요청
-    def get_json(self, path: str, referer: str) -> dict:
+    def get_json(self, path: str, referer: str, form: dict | None = None) -> dict:
+        """form 이 있으면 POST (릴스 목록처럼 웹이 POST 로 부르는 API)."""
         headers = {"Referer": referer}
         csrf = self.session.cookies.get("csrftoken")
         if csrf:
             headers["X-CSRFToken"] = csrf
         try:
-            resp = self.session.get(BASE + path, headers=headers, timeout=self.timeout, allow_redirects=False)
+            if form is None:
+                resp = self.session.get(BASE + path, headers=headers, timeout=self.timeout, allow_redirects=False)
+            else:
+                resp = self.session.post(BASE + path, data=form, headers=headers, timeout=self.timeout,
+                                         allow_redirects=False)
         except requests.RequestException as exc:
             raise InstaError(f"인스타에 연결하지 못했습니다 ({exc.__class__.__name__}). 인터넷 연결을 확인하세요.") from exc
         return self._check(resp)
@@ -110,6 +115,11 @@ class InstaClient:
     def feed(self, user_id: str, username: str, count: int = 12) -> dict:
         """로그인 필요. 게시물 목록 (릴스 재생수 포함)."""
         return self.get_json(f"/api/v1/feed/user/{user_id}/?count={count}", f"{BASE}/{username}/")
+
+    def clips(self, user_id: str, username: str, count: int = 12) -> dict:
+        """로그인 필요. 프로필 릴스 탭 목록 (피드에 안 올린 릴스 포함, 재생수 포함)."""
+        form = {"target_user_id": user_id, "page_size": str(count), "include_feed_video": "true"}
+        return self.get_json("/api/v1/clips/user/", f"{BASE}/{username}/reels/", form)
 
     def media_owner(self, media_id: str) -> str | None:
         """로그인 필요. 게시물 · 릴스 ID → 올린 계정 아이디."""

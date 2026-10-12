@@ -83,6 +83,13 @@ QPushButton#Link {{ background: transparent; color: {ORANGE_TEXT}; padding: 3px 
 QPushButton#Link:hover {{ color: {ORANGE_HOVER}; background: transparent; }}
 QPushButton#Small {{ background: {FILL}; padding: 5px 11px; font-size: 12px; border-radius: 8px; font-weight: 700; }}
 QPushButton#Small:hover {{ background: #DEDEE2; }}
+QPushButton#Seg {{ background: {FILL}; color: {MUTED}; font-weight: 700; font-size: 13px; padding: 7px 18px; border-radius: 0; }}
+QPushButton#Seg[side="left"] {{ border-top-left-radius: 9px; border-bottom-left-radius: 9px; }}
+QPushButton#Seg[side="right"] {{ border-top-right-radius: 9px; border-bottom-right-radius: 9px; }}
+QPushButton#Seg:hover {{ color: {BLACK}; }}
+QPushButton#Seg:checked {{ background: {BLACK}; color: white; }}
+QPushButton#Seg:disabled {{ color: {SUBTLE}; }}
+QPushButton#Seg:checked:disabled {{ background: #48484A; color: white; }}
 
 QPlainTextEdit {{ background: {BG}; border: 1px solid transparent; border-radius: 10px; padding: 8px;
     selection-background-color: {ORANGE}; selection-color: white; color: {BLACK}; font-size: 13px; }}
@@ -255,8 +262,14 @@ def app_icon() -> QIcon:
 # ---------------------------------------------------------------- 상태 알약 · 통계 칩
 
 
+PILL_ROLE = Qt.ItemDataRole.UserRole + 2  # 모델이 True 를 주는 칸만 상태 알약으로 그린다
+
+
 class StatusDelegate(QStyledItemDelegate):
     def paint(self, painter: QPainter, option, index) -> None:
+        if not index.data(PILL_ROLE):
+            super().paint(painter, option, index)
+            return
         opt = QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
         status = opt.text
@@ -286,6 +299,8 @@ class StatusDelegate(QStyledItemDelegate):
 
     def sizeHint(self, option, index) -> QSize:  # noqa: N802
         hint = super().sizeHint(option, index)
+        if not index.data(PILL_ROLE):
+            return hint
         return QSize(max(hint.width(), 96), max(hint.height(), 36))
 
 

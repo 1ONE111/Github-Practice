@@ -137,5 +137,5 @@ def export_xlsx(path: str | Path, title: str, columns: Sequence[Column], rows: l
     return path
 
 
-def default_filename(when: dt.datetime | None = None) -> str:
-    return f"인스타크롤링_{(when or dt.datetime.now()):%y%m%d}.xlsx"
+def default_filename(label: str, when: dt.datetime | None = None) -> str:
+    return f"인스타크롤링_{label}_{(when or dt.datetime.now()):%y%m%d}.xlsx"

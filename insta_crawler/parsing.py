@@ -91,6 +91,10 @@ def profile_url(username: str) -> str:
     return f"https://www.instagram.com/{username}/"
 
 
+def reels_url(username: str) -> str:
+    return f"https://www.instagram.com/{username}/reels/"
+
+
 _SHORTCODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
 
@@ -130,7 +134,8 @@ def to_count(value: Any) -> int | None:
     return int(text) if text.isdigit() else None
 
 
-def _first(*values: Any) -> int | None:
+def first_count(*values: Any) -> int | None:
+    """값들 중 처음으로 숫자로 읽히는 것."""
     for value in values:
         count = to_count(value)
         if count is not None:
@@ -150,19 +155,22 @@ def posts_from_profile(user: dict) -> list[Post]:
         posts.append(Post(
             code=node.get("shortcode"),
             taken_at=to_count(node.get("taken_at_timestamp")),
-            likes=_first(node.get("edge_liked_by"), node.get("edge_media_preview_like"), node.get("like_count")),
-            comments=_first(node.get("edge_media_to_comment"), node.get("edge_media_preview_comment"),
+            likes=first_count(node.get("edge_liked_by"), node.get("edge_media_preview_like"), node.get("like_count")),
+            comments=first_count(node.get("edge_media_to_comment"), node.get("edge_media_preview_comment"),
                             node.get("comment_count")),
-            views=_first(node.get("video_play_count"), node.get("video_view_count")) if is_video else None,
+            views=first_count(node.get("video_play_count"), node.get("video_view_count")) if is_video else None,
             is_video=is_video,
         ))
     return posts
 
 
 def posts_from_feed(data: dict) -> list[Post]:
-    """로그인 상태의 /api/v1/feed/user/{id}/ 응답. 릴스는 앱에 보이는 재생수(play_count)가 들어 있다."""
+    """로그인 상태의 피드(/feed/user/{id}/) 또는 릴스 탭(/clips/user/, items[].media) 응답.
+    릴스는 앱에 보이는 재생수(play_count)가 들어 있다."""
     posts = []
     for item in data.get("items") or []:
+        if isinstance(item, dict) and isinstance(item.get("media"), dict):
+            item = item["media"]
         if not isinstance(item, dict):
             continue
         is_video = item.get("media_type") == 2 or item.get("product_type") in ("clips", "igtv")
@@ -171,7 +179,7 @@ def posts_from_feed(data: dict) -> list[Post]:
             taken_at=to_count(item.get("taken_at")),
             likes=to_count(item.get("like_count")),
             comments=to_count(item.get("comment_count")),
-            views=_first(item.get("play_count"), item.get("ig_play_count"), item.get("view_count"),
+            views=first_count(item.get("play_count"), item.get("ig_play_count"), item.get("view_count"),
                          item.get("video_view_count")) if is_video else None,
             is_video=is_video,
         ))

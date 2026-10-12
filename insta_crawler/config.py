@@ -31,6 +31,7 @@ def session_path() -> Path:
 
 @dataclass
 class Settings:
+    mode: str = "feed"            # feed: 피드 최신 N개 | reels: 릴스 최신 N개
     posts: int = 5                # 평균 낼 최근 게시물 수 (인스타가 한 번에 주는 최대 12)
     request_delay: float = 3.0    # 계정 사이 대기(초). 짧으면 인스타가 잠시 막는다
     cooldown: int = 90            # 요청 제한에 걸렸을 때 한 번 기다렸다 다시 시도하는 시간(초)
