@@ -115,9 +115,23 @@ ROUTES: dict[tuple[str, str], tuple[str, str]] = {
         """<div class="blog2_container"><span class="writer"><span class="nick"><a>포스팅작성자</a></span></span></div>
         <div class="se-title-text"><span>포스팅 제목</span></div>
         <span class="se_publishDate">2026. 10. 2. 9:00</span>
-        <div class="area_sympathy"><div class="u_likeit_list_module"><a><em class="u_cnt _count" id="lk"></em></a></div></div>
-        <a class="btn_comment">댓글 <em id="commentCount">4</em></a>
+        <div class="area_sympathy"><div class="u_likeit_list_module">
+          <div class="u_likeit_layer _faceLayer" style="display:none"><ul><li class="u_likeit_list like">
+            <span class="u_likeit_list_name _label">공감</span><span class="u_likeit_list_count _count">0</span></li></ul></div>
+          <a class="u_likeit_list_btn"><span class="u_likeit_icons"></span><em class="u_likeit_text _count num" id="lk"></em></a>
+        </div></div>
+        <a class="btn_comment">댓글 <em id="commentCount" class="_commentCount">4</em></a>
         <script>setTimeout(function(){document.getElementById('lk').textContent='21';}, 800);</script>""",
+    )),
+    # 댓글 0개 글: 댓글 칸은 있는데 숫자가 비어 있음
+    ("blog.naver.com", "/PostView.naver?blogId=zero&logNo=1"): (HTML, page(
+        "댓글 없는 글 : 네이버 블로그",
+        """<div class="se-title-text"><span>댓글 없는 글</span></div>
+        <div class="area_sympathy"><div class="u_likeit_list_module">
+          <div class="u_likeit_layer" style="display:none"><span class="u_likeit_list_count _count">0</span></div>
+          <a><em class="u_likeit_text _count num" id="lk"></em></a></div></div>
+        <a class="btn_comment">댓글 <em id="commentCount" class="_commentCount"> </em></a>
+        <script>setTimeout(function(){document.getElementById('lk').textContent='3';}, 600);</script>""",
     )),
     # ---- 방문자 위젯 API (브라우저 대체 경로)
     ("blog.naver.com", "/NVisitorgp4Ajax.nhn"): (XML, "<visitorcnts></visitorcnts>"),

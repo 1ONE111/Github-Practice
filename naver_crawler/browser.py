@@ -174,11 +174,12 @@ class BrowserManager:
 # ---------------------------------------------------------------- 페이지 도우미
 
 _JS_FIND_TEXT = r"""
-const sels = arguments[0], needDigit = arguments[1], contains = arguments[2];
+const sels = arguments[0], needDigit = arguments[1], contains = arguments[2], exclude = arguments[3];
 for (const s of sels) {
   let els;
   try { els = document.querySelectorAll(s); } catch (e) { continue; }
   for (const el of els) {
+    if (exclude && el.closest(exclude)) continue;
     const t = ((el.innerText || '').trim() || (el.textContent || '').trim()).replace(/\s+/g, ' ');
     if (!t) continue;
     if (needDigit && !/\d/.test(t)) continue;
@@ -278,9 +279,11 @@ class Page:
                 return False
             time.sleep(0.4)
 
-    def text(self, selectors: list[str], need_digit: bool = False, contains: list[str] | None = None) -> str | None:
+    def text(self, selectors: list[str], need_digit: bool = False, contains: list[str] | None = None,
+             exclude: str | None = None) -> str | None:
+        """선택자 순서대로 글자가 있는 첫 요소. exclude 안에 든 요소는 건너뛴다."""
         try:
-            return self.driver.execute_script(_JS_FIND_TEXT, selectors, need_digit, contains)
+            return self.driver.execute_script(_JS_FIND_TEXT, selectors, need_digit, contains, exclude)
         except WebDriverException:
             return None
 

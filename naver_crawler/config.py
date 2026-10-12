@@ -49,7 +49,7 @@ class Settings:
     chromedriver_path: str = ""     # 비우면 Selenium Manager 가 자동으로 맞춤
     chrome_binary: str = ""         # 비우면 설치된 크롬 자동 탐색
     save_debug_html: bool = False   # 실패 시 페이지 HTML 저장
-    workers: int = 4                # 크롬 없이 처리하는 작업(블로그 정보)의 동시 처리 수
+    workers: int = 4                # 크롬 없이 처리하는 작업(블로그 정보 · 포스팅)의 동시 처리 수
     browser_fallback: bool = True   # 빠른 수집에서 빈 값만 크롬으로 다시 확인
     export_dir: str = ""
     settings_version: int = SETTINGS_VERSION

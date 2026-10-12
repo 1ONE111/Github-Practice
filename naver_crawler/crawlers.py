@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from html import unescape
 import re
 import threading
 from urllib.parse import urlparse
@@ -24,7 +25,6 @@ from naver_crawler.http import NaverHttp
 from naver_crawler.parsing import (
     BlogRef,
     CafeRef,
-    buddy_count_from_text,
     club_id_from_html,
     find_dict,
     find_key,
@@ -516,7 +516,6 @@ def _visitor_counts(ctx: Context, blog_id: str, page: Page | None) -> list[tuple
     return counts
 
 
-BUDDY_KEYS = ["subscriberCount", "buddyCount", "neighborCount", "followerCount"]
 MOBILE_BLOG_APIS = (
     "https://m.blog.naver.com/rego/BlogInfo.naver?blogId={blog_id}",
     "https://m.blog.naver.com/api/blogs/{blog_id}",
@@ -524,7 +523,6 @@ MOBILE_BLOG_APIS = (
 _HTML_KEYS = {
     "nickname": re.compile(r'"nickName"\s*:\s*"([^"]+)"'),
     "name": re.compile(r'"blogName"\s*:\s*"([^"]+)"'),
-    "buddies": re.compile(r'"subscriberCount"\s*:\s*(\d+)'),
 }
 
 
@@ -558,33 +556,8 @@ def _blog_profile_api(ctx: Context, blog_id: str) -> tuple[str | None, str | Non
     return api.find(["blogName"]), api.find(["nickName", "nickname"])
 
 
-def _buddy_count(ctx: Context, page: Page, sel: dict, api: _BlogApi) -> int | None:
-    """이웃수: PC 화면 → 페이지 내부 JSON → 화면 글자 → 모바일 API → 모바일 블로그 화면."""
-    buddies = _count(page.text(sel.get("buddies", []), need_digit=True), ["이웃"])
-    if buddies is None:
-        for resp in page.captured_json():
-            buddies = _first(buddies, parse_count(find_key(resp.data, BUDDY_KEYS)))
-    if buddies is None:
-        buddies = _first(buddy_count_from_text(page.body_text()), buddy_count_from_text(page.top_body_text()))
-    if buddies is None:
-        buddies = parse_count(api.find(BUDDY_KEYS))
-    if buddies is None:
-        page.open(f"https://m.blog.naver.com/{api.blog_id}", [])
-
-        def mobile() -> int | None:
-            for resp in page.captured_json():
-                found = parse_count(find_key(resp.data, BUDDY_KEYS))
-                if found is not None:
-                    return found
-            return buddy_count_from_text(page.body_text())
-
-        page.wait_until(lambda: mobile() is not None, timeout=min(8, ctx.settings.page_timeout))
-        buddies = mobile()
-    return buddies
-
-
 def crawl_blog_info_fast(ctx: Context, url: str) -> RowResult:
-    """크롬 없이: 방문자 위젯(5일) + 모바일 블로그 정보(닉네임 · 블로그명 · 이웃수)."""
+    """크롬 없이: 방문자 위젯(5일) + 모바일 블로그 정보(닉네임 · 블로그명)."""
     task = TASK_BY_ID["blog_info"]
     ref = parse_blog_url(url)
     if not ref.blog_id:
@@ -593,14 +566,12 @@ def crawl_blog_info_fast(ctx: Context, url: str) -> RowResult:
     api = _BlogApi(ctx, blog_id)
     nickname = api.find(["nickName", "nickname"])
     name = api.find(["blogName"])
-    buddies = parse_count(api.find(BUDDY_KEYS))
-    if not nickname or not name or buddies is None:
+    if not nickname or not name:
         status, html = ctx.api_fetch(f"https://m.blog.naver.com/{blog_id}", f"https://m.blog.naver.com/{blog_id}")
         if status == 200 and html:
             found = {k: (m.group(1) if (m := rx.search(html)) else None) for k, rx in _HTML_KEYS.items()}
             nickname = _first(nickname, found["nickname"])
             name = _first(name, found["name"])
-            buddies = _first(buddies, parse_count(found["buddies"]), buddy_count_from_text(html))
 
     state, counts = visitor_widget(ctx, blog_id)
     counts = counts[-5:]  # 최근 5일 (오늘 포함)
@@ -608,7 +579,6 @@ def crawl_blog_info_fast(ctx: Context, url: str) -> RowResult:
         "name": name,
         "nickname": nickname,
         "avg": int(sum(c for _, c in counts) / len(counts)) if counts else None,
-        "buddies": buddies,
     }
     if state == "hidden" and (name or nickname):
         return RowResult(values, STATUS_NO_WIDGET, "방문자 위젯이 없는 블로그 (엑셀 저장 시 자동 제외)")
@@ -637,13 +607,11 @@ def crawl_blog_info(ctx: Context, url: str) -> RowResult:
     else:
         ctx.log(f"{blog_id}: PC 블로그 주소가 다른 페이지로 넘어가 화면 값은 쓰지 않습니다")
 
-    buddies = _buddy_count(ctx, page, sel, api)
     counts = _visitor_counts(ctx, blog_id, page)[-5:]  # 최근 5일
     values = {
         "name": name,
         "nickname": nickname,
         "avg": int(sum(c for _, c in counts) / len(counts)) if counts else None,
-        "buddies": buddies,
     }
     if not counts and (name or nickname):
         return RowResult(values, STATUS_NO_WIDGET, "방문자 위젯이 없는 블로그 (엑셀 저장 시 자동 제외)")
@@ -653,19 +621,116 @@ def crawl_blog_info(ctx: Context, url: str) -> RowResult:
 # ================================================================ 5. 블로그 포스팅
 
 
+LIKE_API = "https://blog.like.naver.com/v1/search/contents?suppress_response_codes=true&q=BLOG%5B{cid}%5D&isDuplication=true"
+COMMENT_API = (
+    "https://apis.naver.com/commentBox/cbox/web_naver_list_jsonp.json?ticket=blog&templateId=default&pool=blogid"
+    "&lang=ko&country=&objectId={blog_no}_201_{log_no}&pageSize=1&indexSize=10&groupId={blog_no}"
+    "&listType=OBJECT&pageType=default&_callback=cb"
+)
+LIKE_LAYER = ".u_likeit_layer"  # 반응 고르기 팝업: 공감이 불러와지기 전부터 '0' 이 들어 있어 읽으면 안 된다
+_M_COMMENT = re.compile(r'commentCount="(\d+)"')                          # 모바일 글: commentCount="3"
+_PC_COMMENT = re.compile(r'id="commentCount"[^>]*>\s*([\d,]*)\s*<')      # PC 글: <em id="commentCount"> 3 </em>
+_OG_TITLE = re.compile(r'<meta\s+property="og:title"\s+content="([^"]*)"')
+_DATE_RES = [
+    re.compile(r'class="[^"]*se_publishDate[^"]*"[^>]*>\s*([^<]+?)\s*<'),                  # PC 글
+    re.compile(r'class="[^"]*blog_date[^"]*"[^>]*>\s*(?:<span[^>]*>\s*)?([^<]+?)\s*<'),    # 모바일 글
+]
+_ABS_DATE = re.compile(r"\d{4}\.\s*\d{1,2}\.\s*\d{1,2}")
+_ADD_DATE = re.compile(r'addDate="(\d{12,13})"')  # 모바일 글: 작성 시각 (밀리초)
+KST = dt.timezone(dt.timedelta(hours=9))
+
+
 def _like_count_from(data: Any, cid: str | None) -> int | None:
+    """공감 API 응답에서 그 글의 공감 수 (반응 종류 합계). 글 항목은 있는데 반응이 없으면 0."""
     for d in walk_dicts(data):
         reactions = d.get("reactions")
         if not isinstance(reactions, list):
             continue
         if cid and d.get("contentsId") not in (None, cid):
             continue
-        total = sum(parse_count(r.get("count")) or 0 for r in reactions if isinstance(r, dict))
-        return total
+        return sum(parse_count(r.get("count")) or 0 for r in reactions if isinstance(r, dict))
     return None
 
 
+def _comment_count_from_html(html: str) -> int | None:
+    """댓글 칸이 있는데 숫자가 비어 있으면 댓글 0개다."""
+    m = _M_COMMENT.search(html)
+    if m:
+        return int(m.group(1))
+    m = _PC_COMMENT.search(html)
+    if m:
+        return parse_count(m.group(1)) if m.group(1) else 0
+    return None
+
+
+def _post_title_from_html(html: str) -> str | None:
+    m = _OG_TITLE.search(html)
+    return strip_suffixes(unescape(m.group(1)), BLOG_TITLE_SUFFIXES) if m else None
+
+
+def _post_date_from_html(html: str) -> str | None:
+    """'2026. 10. 2. 14:00' 형식. 화면 글자가 '3시간 전' 이면 작성 시각(addDate)으로 만든다."""
+    for rx in _DATE_RES:
+        m = rx.search(html)
+        if m and _ABS_DATE.search(m.group(1)):
+            return unescape(m.group(1)).strip()
+    m = _ADD_DATE.search(html)
+    if m:
+        t = dt.datetime.fromtimestamp(int(m.group(1)) / 1000, KST)
+        return f"{t.year}. {t.month}. {t.day}. {t.hour}:{t.minute:02d}"
+    return None
+
+
+def _like_api(ctx: Context, blog_id: str, log_no: str) -> int | None:
+    cid = f"{blog_id}_{log_no}"
+    data = ctx.api_json(LIKE_API.format(cid=cid), f"https://blog.naver.com/{blog_id}/{log_no}")
+    return _like_count_from(data, cid) if data is not None else None
+
+
+def _comment_api(ctx: Context, blog_id: str, log_no: str, api: "_BlogApi") -> int | None:
+    blog_no = api.find(["blogNo"])
+    if not blog_no:
+        return None
+    data = ctx.api_json(COMMENT_API.format(blog_no=blog_no, log_no=log_no),
+                        f"https://blog.naver.com/PostView.naver?blogId={blog_id}&logNo={log_no}")
+    count = find_key(data, ["count"]) if data is not None else None
+    if isinstance(count, dict):
+        return parse_count(_first(count.get("exposeCount"), count.get("total"), count.get("comment")))
+    return None
+
+
+def crawl_blog_post_fast(ctx: Context, url: str) -> RowResult:
+    """크롬 없이: 공감 API + 모바일/PC 글 페이지 글자(댓글 수 · 제목 · 작성일) + 블로그 정보(닉네임)."""
+    task = TASK_BY_ID["blog_post"]
+    ref = parse_blog_url(url)
+    if not (ref.blog_id and ref.log_no):
+        return RowResult({}, STATUS_FAIL, "주소에서 블로그 ID 와 글 번호를 찾지 못했습니다.")
+    blog_id, log_no = ref.blog_id, ref.log_no
+    api = _BlogApi(ctx, blog_id)
+    values = {
+        "title": None,
+        "nickname": api.find(["nickName", "nickname"]),
+        "likes": _like_api(ctx, blog_id, log_no),
+        "comments": None,
+        "date": None,
+    }
+    for page_url in (f"https://m.blog.naver.com/{blog_id}/{log_no}",
+                     f"https://blog.naver.com/PostView.naver?blogId={blog_id}&logNo={log_no}"):
+        if values["comments"] is not None and values["title"] and values["date"]:
+            break
+        status, html = ctx.api_fetch(page_url, f"https://blog.naver.com/{blog_id}")
+        if status != 200 or not html:
+            continue
+        values["comments"] = _first(values["comments"], _comment_count_from_html(html))
+        values["title"] = _first(values["title"], _post_title_from_html(html))
+        values["date"] = _first(values["date"], _post_date_from_html(html))
+    if values["comments"] is None:
+        values["comments"] = _comment_api(ctx, blog_id, log_no, api)
+    return finish(task, values)
+
+
 def crawl_blog_post(ctx: Context, url: str) -> RowResult:
+    """크롬으로 글을 열어서 읽는다 (빠른 수집에서 빈 값이 남았을 때)."""
     task = TASK_BY_ID["blog_post"]
     sel = ctx.selectors["blog_post"]
     ref = parse_blog_url(url)
@@ -676,35 +741,39 @@ def crawl_blog_post(ctx: Context, url: str) -> RowResult:
 
     page = ctx.page()
     page.open(target, sel.get("frames", ["mainFrame"]))
-    page.wait_until(lambda: page.text(sel["title"]) is not None or page.text(sel["comments"], need_digit=True) is not None)
-    page.wait_until(lambda: page.text(sel["likes"], need_digit=True) is not None, timeout=5)
+    page.wait_until(lambda: page.text(sel["title"]) is not None or page.count(sel["comments"]) > 0)
 
     values = {
         "title": page.text(sel["title"]),
-        "likes": _count(page.text(sel["likes"], need_digit=True), LIKE_LABELS),
+        "likes": None,
         "comments": _count(page.text(sel["comments"], need_digit=True), COMMENT_LABELS),
         "date": page.text(sel["date"], need_digit=True),
         "nickname": page.text(sel.get("nickname", [])),
     }
+    if values["comments"] is None and page.count(sel["comments"]) > 0:
+        values["comments"] = 0  # 댓글 칸은 있는데 숫자가 없음 = 댓글 0개
+
+    # 공감: (1) 네이버 공감 API  (2) 페이지가 받아온 공감 응답  (3) 하트 옆 숫자 (숨은 반응 팝업의 0 은 제외)
+    if ref.blog_id and ref.log_no:
+        values["likes"] = _like_api(ctx, ref.blog_id, ref.log_no)
+    if values["likes"] is None:
+        def from_page() -> int | None:
+            for resp in page.captured_json(lambda u: "like.naver.com" in u):
+                found = _like_count_from(resp.data, cid)
+                if found is not None:
+                    return found
+            return _count(page.text(sel["likes"], need_digit=True, exclude=LIKE_LAYER), LIKE_LABELS)
+
+        page.wait_until(lambda: from_page() is not None, timeout=min(10, ctx.settings.page_timeout))
+        values["likes"] = from_page()
+
     if values["nickname"] is None:
         for resp in page.captured_json():
             values["nickname"] = _first(values["nickname"], find_key(resp.data, ["nickName", "nickname"]))
     if values["nickname"] is None and ref.blog_id:
         values["nickname"] = _blog_profile_api(ctx, ref.blog_id)[1]
-    if values["likes"] is None or values["comments"] is None:
-        for resp in page.captured_json():
-            if values["likes"] is None and "like.naver.com" in resp.url:
-                values["likes"] = _like_count_from(resp.data, cid)
-            if values["comments"] is None and "comment" in resp.url.lower():
-                count = find_key(resp.data, ["count"])
-                if isinstance(count, dict):
-                    values["comments"] = parse_count(_first(count.get("comment"), count.get("total")))
-    if values["likes"] is None and cid:
-        data = ctx.api_json(
-            f"https://blog.like.naver.com/v1/search/contents?suppress_response_codes=true&q=BLOG[{cid}]",
-            f"https://blog.naver.com/{ref.blog_id}/{ref.log_no}",
-        )
-        values["likes"] = _like_count_from(data, cid) if data is not None else None
+    if values["comments"] is None and ref.blog_id and ref.log_no:
+        values["comments"] = _comment_api(ctx, ref.blog_id, ref.log_no, _BlogApi(ctx, ref.blog_id))
     values["title"] = _first(values["title"], strip_suffixes(page.top_title(), BLOG_TITLE_SUFFIXES))
     return finish(task, values, ctx, page)
 
@@ -773,21 +842,19 @@ TASKS: tuple[TaskSpec, ...] = (
     TaskSpec(
         "blog_info",
         "블로그 정보",
-        "블로그 주소로 닉네임 · 블로그명 · 이웃수 · 일방문자수(5일 평균)를 가져옵니다. 이웃 많은 순 정렬.",
+        "블로그 주소로 닉네임 · 블로그명 · 일방문자수(5일 평균)를 가져옵니다. 방문자 많은 순 정렬.",
         "https://blog.naver.com/블로그아이디\n한 줄에 하나씩 입력",
         (
             Column("nickname", "닉네임", width=16, required=True),
             Column("name", "블로그명", width=26, required=True),
             Column("url", "블로그링크", width=34),
-            Column("buddies", "이웃수", "int", width=9, required=True),
             Column("avg", "일방문자수(5일 평균)", "int", width=14, required=True),
         ),
         crawl_blog_info,
         (
-            "* 이웃수: 수집 시점 네이버 블로그 표시 기준, 이웃 많은 순 정렬",
-            "* 일방문자수(5일 평균): 네이버 블로그 방문자 위젯 기준 최근 5일 평균 (오늘 포함)",
+            "* 일방문자수(5일 평균): 네이버 블로그 방문자 위젯 기준 최근 5일 평균 (오늘 포함), 많은 순 정렬",
         ),
-        sort_desc="buddies",
+        sort_desc="avg",
         fast=crawl_blog_info_fast,
     ),
     TaskSpec(
@@ -803,6 +870,7 @@ TASKS: tuple[TaskSpec, ...] = (
             Column("date", "작성일", width=15),
         ),
         crawl_blog_post,
+        fast=crawl_blog_post_fast,
     ),
     TaskSpec(
         "kin",

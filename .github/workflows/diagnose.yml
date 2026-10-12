@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       blog_ids:
-        description: "블로그 ID (공백으로 구분)"
+        description: "블로그 ID 또는 포스팅 URL (공백으로 구분)"
         required: true
         default: "shriya punky85 alldaybunny"
 

@@ -90,7 +90,6 @@ DEFAULT_SELECTORS: dict[str, dict[str, list[str]]] = {
     "blog_info": {
         "frames": ["mainFrame"],
         "nickname": ["#nickNameArea", ".nick", "strong.nick", ".blog_author .nick", "[class*='nickname']"],
-        "buddies": ["#buddyCount", ".buddy_count", ".cnt_buddy", "[class*='buddy_cnt']"],
         "name": ["#blogTitleName", ".blog_title", "#blog-title", "[class*='blog_name']"],
     },
     "blog_post": {
@@ -103,11 +102,11 @@ DEFAULT_SELECTORS: dict[str, dict[str, list[str]]] = {
             ".tit_h3",
         ],
         "likes": [
+            ".area_sympathy .u_likeit_list_module .u_likeit_text._count",
             ".area_sympathy em.u_cnt._count",
             ".wrap_postcomment em.u_cnt._count",
+            ".u_likeit_list_module .u_likeit_text._count",
             ".u_likeit_list_module em.u_cnt._count",
-            ".u_likeit_text._count",
-            ".area_sympathy ._count",
         ],
         "comments": [
             "#commentCount",

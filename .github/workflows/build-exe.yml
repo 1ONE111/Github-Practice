@@ -9,6 +9,10 @@ on:
         description: "릴리스 태그 (예: v2.0.0). 비우면 Artifacts 로만 exe 저장"
         required: false
         default: ""
+      prerelease:
+        description: "미리보기 릴리스 (최신 다운로드 링크는 그대로 둠)"
+        type: boolean
+        default: false
   push:
     tags: ["v*"]
 
@@ -48,4 +52,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.version }}
-        run: gh release create "$env:TAG" dist/NaverCrawler.exe --target "${{ github.sha }}" --title "네이버 크롤러 $env:TAG" --generate-notes
+        run: |
+          $extra = @()
+          if ("${{ inputs.prerelease }}" -eq "true") { $extra += "--prerelease" }
+          gh release create "$env:TAG" dist/NaverCrawler.exe --target "${{ github.sha }}" --title "네이버 크롤러 $env:TAG" --generate-notes @extra

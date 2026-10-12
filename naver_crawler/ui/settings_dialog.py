@@ -81,7 +81,7 @@ class SettingsDialog(QDialog):
         form.addRow(self.debug_html)
         form.addRow("URL 사이 대기", self.delay)
         form.addRow("페이지 최대 대기", self.timeout)
-        form.addRow("동시 처리 (블로그 정보)", self.workers)
+        form.addRow("동시 처리 (블로그)", self.workers)
         form.addRow(self.fallback)
         form.addRow("ChromeDriver 경로", _path_row(self.driver, "chromedriver 선택", "chromedriver (chromedriver*)"))
         form.addRow("Chrome 경로", _path_row(self.chrome, "chrome 선택", "chrome (chrome*)"))

@@ -96,23 +96,7 @@ def test_blog_info_and_no_widget_does_not_stop(engine):
     assert no_widget.status == "위젯없음"
     assert no_widget.values["name"] == "위젯 없는 블로그"
     assert ok.status == "완료", ok.message
-    # PC 화면의 '이웃 1,234명' (서로이웃 23명은 무시)
-    assert ok.values == {"name": "테스트 블로그", "nickname": "테스터", "avg": 30, "buddies": 1234}
-
-
-def test_blog_buddy_count_fallbacks(engine):
-    visitors = '<visitorcnts><visitorcnt id="20261006" cnt="100"/><visitorcnt id="20261007" cnt="300"/></visitorcnts>'
-    http = FakeHttp({
-        "https://blog.naver.com/NVisitorgp4Ajax.nhn": visitors,
-        "https://m.blog.naver.com/api/blogs/apiblog": '{"isSuccess": true, "result": {"subscriberCount": 5868}}',
-    })
-    from_api, from_mobile = run(engine, "blog_info",
-                                ["https://blog.naver.com/apiblog", "https://blog.naver.com/mobileblog"], http)
-    assert from_api.status == "완료", from_api.message
-    assert from_api.values["buddies"] == 5868          # 모바일 블로그 API
-    assert from_mobile.status == "완료", from_mobile.message
-    assert from_mobile.values["buddies"] == 319000     # 모바일 화면 '31.9만명의 이웃'
-    assert from_mobile.values["avg"] == 200
+    assert ok.values == {"name": "테스트 블로그", "nickname": "테스터", "avg": 30}
 
 
 def test_blog_visitor_average_uses_last_five_days(engine):
@@ -121,6 +105,14 @@ def test_blog_visitor_average_uses_last_five_days(engine):
     (res,) = run(engine, "blog_info", ["https://blog.naver.com/tester"],
                  FakeHttp({"https://blog.naver.com/NVisitorgp4Ajax.nhn": f"<visitorcnts>{xml}</visitorcnts>"}))
     assert res.values["avg"] == 50  # (30+40+50+60+70)/5
+
+
+def test_blog_post_zero_comments_is_zero_not_missing(engine):
+    """댓글 칸이 비어 있으면 0, 공감은 숨은 반응 팝업의 0 이 아니라 하트 옆 숫자."""
+    (res,) = run(engine, "blog_post", ["https://blog.naver.com/zero/1"])
+    assert res.status == "완료", res.message
+    assert res.values["comments"] == 0
+    assert res.values["likes"] == 3
 
 
 def test_blog_post(engine):
