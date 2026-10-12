@@ -1,0 +1,50 @@
+name: Build Insta exe
+
+# 인스타 크롤러 exe (선택 사항: 로컬에서 build_insta.bat 으로 만들어도 된다).
+# Actions 탭에서 수동 실행(버전 입력 시 Release 생성)하거나 insta-v* 태그를 올리면 exe 를 만든다.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "릴리스 태그 (예: insta-v1.0.0). 비우면 Artifacts 로만 exe 저장"
+        required: false
+        default: ""
+  push:
+    tags: ["insta-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: python -m pip install -r requirements-dev.txt
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q tests/test_insta.py
+      - name: Build
+        run: python -m PyInstaller --noconfirm --clean InstaCrawler.spec
+      - name: Self test
+        shell: pwsh
+        run: |
+          $env:INSTA_CRAWLER_HOME = "$env:RUNNER_TEMP\ic-home"
+          $p = Start-Process -FilePath dist\InstaCrawler.exe -ArgumentList '--selftest' -Wait -PassThru
+          Get-Content "$env:INSTA_CRAWLER_HOME\selftest.log"
+          if ($p.ExitCode -ne 0) { throw "selftest failed: $($p.ExitCode)" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: InstaCrawler
+          path: dist/InstaCrawler.exe
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.version != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.version }}
+        run: gh release create "$env:TAG" dist/InstaCrawler.exe --target "${{ github.sha }}" --title "인스타 크롤러 $env:TAG" --generate-notes
