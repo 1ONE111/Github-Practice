@@ -73,6 +73,40 @@ ROUTES: dict[tuple[str, str], tuple[str, str]] = {
             "otherArticles": [{"id": 1, "readCount": 99999}],
         }
     })),
+    # ---- 카페 게시글 (실제 새 화면: 댓글 칸을 0 으로 먼저 그리고 나중에 채움, 옆 글 응답도 같이 옴)
+    ("cafe.naver.com", "/slowcafe/789"): (HTML, page(
+        "느린 글 : 네이버 카페",
+        """<div class="ArticleContentBox"><div class="article_header">
+          <div class="ArticleTitle"><h3 class="title_text">느린 글</h3></div>
+          <div class="WriterInfo"><div class="nick_box"><button class="nickname">느림보</button></div>
+            <div class="article_info"><span class="date">2026.10.06. 17:16</span><span class="count">조회 254</span></div></div></div>
+          <div class="ReplyBox"><div class="box_left">
+            <div class="like_article"><a><em class="u_cnt _count" style="display: none;">0</em></a></div>
+            <a href="#" class="button_comment">댓글 <strong class="num" id="cc">0</strong></a>
+          </div></div></div>
+        <script>
+        fetch('https://article.cafe.naver.com/gw/v2.1/cafes/444/articles/789/siblings?limit=5').then(r => r.json());
+        setTimeout(() => fetch('https://route-like.naver.com/v1/search/contents?suppress_response_codes=true'
+          + '&q=CAFE%5B444_slowcafe_789%5D|CAFE-COMMENT%5B444-789-1%5D').then(r => r.json()), 900);
+        setTimeout(() => fetch('https://article.cafe.naver.com/gw/v4/cafes/444/articles/789?useCafeId=true&requestFrom=A')
+          .then(r => r.json()).then(d => setTimeout(() => {
+            document.getElementById('cc').textContent = d.result.article.commentCount;
+          }, 3000)), 300);
+        </script>""",
+    )),
+    ("article.cafe.naver.com", "/gw/v2.1/cafes/444/articles/789/siblings"): (JSON, json.dumps({
+        "result": {"articles": [{"id": 790, "subject": "옆 글", "readCount": 5, "commentCount": 0}]}
+    })),
+    # 좋아요 응답: 글 좋아요 1, 댓글 좋아요 5 (댓글 것은 무시해야 함). 화면의 좋아요 칸은 계속 숨은 0
+    ("route-like.naver.com", "/v1/search/contents"): (JSON, json.dumps({"contents": [
+        {"serviceId": "CAFE-COMMENT", "contentsId": "444-789-1", "reactions": [{"reactionType": "like", "count": 5}]},
+        {"serviceId": "CAFE", "contentsId": "444_slowcafe_789", "reactions": [{"reactionType": "like", "count": 1}]},
+    ]})),
+    ("article.cafe.naver.com", "/gw/v4/cafes/444/articles/789"): (JSON, json.dumps({
+        "result": {"cafeId": 444, "articleId": 789,
+                   "article": {"id": 789, "subject": "느린 글", "readCount": 254, "commentCount": 2,
+                               "writer": {"nick": "느림보"}}}
+    })),
     # ---- 카페 목록 (평균 조회수, 브라우저 경로)
     ("cafe.naver.com", "/f-e/cafes/222/menus/0"): (HTML, page(
         "목록",

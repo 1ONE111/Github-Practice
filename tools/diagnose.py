@@ -1,14 +1,16 @@
 """실제 네이버 응답 진단 (GitHub Actions 'Diagnose' 워크플로에서 실행).
 
-    python tools/diagnose.py <블로그ID 또는 포스팅 URL> ...
+    python tools/diagnose.py <블로그ID 또는 포스팅 URL 또는 카페 게시글 URL> ...
 
 1) 크롬 없이 요청했을 때 각 주소가 무엇을 돌려주는지 (상태 코드, 핵심 키 주변 글자)
 2) 실제 크롤러로 블로그 정보 / 블로그 포스팅을 수집한 결과
 """
 
+import json
 import re
 import sys
 import threading
+import time
 from pathlib import Path
 
 import requests
@@ -16,10 +18,11 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from naver_crawler.config import Settings  # noqa: E402
-from naver_crawler.crawlers import TASK_BY_ID  # noqa: E402
+from naver_crawler.crawlers import TASK_BY_ID, Context  # noqa: E402
 from naver_crawler.engine import Engine  # noqa: E402
 from naver_crawler.http import DEFAULT_UA  # noqa: E402
-from naver_crawler.parsing import find_key, load_json_loose, parse_blog_url  # noqa: E402
+from naver_crawler.parsing import find_key, load_json_loose, parse_blog_url, parse_cafe_url  # noqa: E402
+from naver_crawler.selectors import load_selectors  # noqa: E402
 
 PATTERNS = [
     r'"(?:subscriberCount|buddyCount|neighborCount|followerCount|nickName|nickname|blogName|displayNickName|dayVisitorCount|totalVisitorCount)"\s*:\s*"?[^,"}]{0,40}',
@@ -118,11 +121,93 @@ def diagnose_posts(s: requests.Session, urls: list[str]) -> None:
         print(f"- {url}: {r.status if r else '-'} {r.values if r else ''} {r.message if r else ''}")
 
 
+CAFE_KEYS = [r'"(?:commentCount|readCount|likeItCount|likeCount|totalCount|isOpen|openArticle|isReadable|'
+             r'errorCode|code|reason|message|isMember|memberLevel|commentReadable|isCommentable)"\s*:\s*"?[^,"}]{0,60}']
+
+# 댓글 숫자가 화면 어디에 있는지 (선택자별 글자 + 태그)
+_JS_DUMP = r"""
+const out = [];
+for (const s of arguments[0]) {
+  let els; try { els = document.querySelectorAll(s); } catch (e) { continue; }
+  let i = 0;
+  for (const el of els) {
+    if (i++ >= 3) break;
+    const t = ((el.innerText || '').trim() || (el.textContent || '').trim()).replace(/\s+/g, ' ').slice(0, 40);
+    out.push(s + '  =>  "' + t + '"  |  ' + el.outerHTML.replace(/\s+/g, ' ').slice(0, 220));
+  }
+}
+return out;
+"""
+EXTRA_COMMENT_SELECTORS = [".button_comment", "[class*='comment'] [class*='num']", "[class*='Comment'] [class*='count']",
+                           ".CommentBox", ".comment_box", ".ArticleBottomBtns"]
+
+
+def diagnose_cafe(s: requests.Session, urls: list[str]) -> None:
+    print("=== 카페 게시글: 크롬 없이 요청 (로그인 안 한 상태) ===")
+    for url in urls:
+        ref = parse_cafe_url(url)
+        print(f"- {url}")
+        club_id = ref.club_id
+        if not club_id and ref.slug:
+            gate = load_json_loose(show(s, "cafe_gate", f"https://apis.naver.com/cafe-web/cafe2/CafeGateInfo.json?cluburl={ref.slug}",
+                                        "https://cafe.naver.com/", [r'"(?:cafeId|clubId|clubid|cafeName|isPublic|openType)"\s*:\s*"?[^,"}]{0,40}']))
+            club_id = find_key(gate, ["cafeId", "clubId", "clubid"]) if gate else None
+        if not club_id or not ref.article_id:
+            print("      카페 ID / 글 번호 없음")
+            continue
+        show(s, "article_api", f"https://apis.naver.com/cafe-web/cafe-articleapi/v2.1/cafes/{club_id}/articles/{ref.article_id}"
+             "?query=&useCafeId=true&requestFrom=A", "https://cafe.naver.com/", CAFE_KEYS)
+        show(s, "comments_api", f"https://apis.naver.com/cafe-web/cafe-articleapi/v2/cafes/{club_id}/articles/{ref.article_id}"
+             "/comments/pages/1?requestFrom=A&orderBy=asc", "https://cafe.naver.com/", CAFE_KEYS)
+
+    print("\n=== 카페 게시글: 크롤러 (창 없는 크롬, 로그인 안 함) ===")
+    settings = Settings(headless=True, keep_login=False, request_delay=0.5, page_timeout=15, save_debug_html=True)
+    engine = Engine(settings, lambda msg: print(f"  log: {msg}"))
+    results = {}
+    try:
+        engine.run(TASK_BY_ID["cafe_article"], list(enumerate(urls)), threading.Event(),
+                   on_result=lambda k, r: results.__setitem__(k, r))
+        for i, url in enumerate(urls):
+            r = results.get(i)
+            print(f"- {url}: {r.status if r else '-'} {r.values if r else ''} {r.message if r else ''}")
+
+        print("\n=== 카페 게시글: 화면에서 댓글 숫자 위치 ===")
+        sel = load_selectors()["cafe_article"]
+        ctx = Context(engine.browser, engine.http, settings, load_selectors(), threading.Event(), lambda m: None)
+        for url in urls:
+            print(f"- {url}")
+            page = ctx.page()
+            page.open(url, sel.get("frames", ["cafe_main"]))
+            page.wait_until(lambda: page.count(sel["views"]) > 0, timeout=12)
+            time.sleep(3)
+            page.enter_frame()
+            print(f"      현재 주소: {page.driver.current_url}")
+            for line in page.driver.execute_script(_JS_DUMP, sel["comments"] + EXTRA_COMMENT_SELECTORS) or []:
+                print(f"      · {line}")
+            body = page.body_text()
+            for m in list(re.finditer(r".{0,30}댓글.{0,30}", body))[:6]:
+                print(f"      [본문] {m.group(0)!r}")
+            for resp in page.captured_json():
+                found = find_key(resp.data, ["commentCount"])
+                if found is not None:
+                    print(f"      [응답] commentCount={found} <- {resp.url[:140]}")
+                if "like" in resp.url.lower():
+                    print(f"      [좋아요 응답] {resp.url[:160]}")
+                    print("         " + json.dumps(resp.data, ensure_ascii=False)[:500])
+            for line in page.driver.execute_script(_JS_DUMP, sel["likes"] + [".like_article"]) or []:
+                print(f"      · {line}")
+    finally:
+        engine.shutdown()
+
+
 def main(args: list[str]) -> None:
     s = requests.Session()
     s.headers.update({"User-Agent": DEFAULT_UA, "Accept-Language": "ko-KR,ko;q=0.9"})
-    posts = [a for a in args if a.startswith("http")]
+    cafes = [a for a in args if "cafe.naver.com" in a]
+    posts = [a for a in args if a.startswith("http") and a not in cafes]
     ids = [a for a in args if not a.startswith("http")]
+    if cafes:
+        diagnose_cafe(s, cafes)
     if posts:
         diagnose_posts(s, posts)
     if not ids:

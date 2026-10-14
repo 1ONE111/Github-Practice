@@ -308,28 +308,53 @@ def crawl_cafe_info(ctx: Context, url: str) -> RowResult:
 # ================================================================ 2. 카페 게시글
 
 
+def _cafe_like_count(data: Any, article_id: str) -> int | None:
+    """네이버 좋아요 응답(route-like.naver.com)에서 이 글의 좋아요 수. 댓글 좋아요(CAFE-COMMENT)는 건너뛴다."""
+    for d in walk_dicts(data):
+        reactions = d.get("reactions")
+        if d.get("serviceId") != "CAFE" or not isinstance(reactions, list):
+            continue
+        if not str(d.get("contentsId", "")).endswith(f"_{article_id}"):
+            continue
+        return sum(parse_count(r.get("count")) or 0 for r in reactions if isinstance(r, dict))
+    return None
+
+
 def crawl_cafe_article(ctx: Context, url: str) -> RowResult:
     task = TASK_BY_ID["cafe_article"]
     sel = ctx.selectors["cafe_article"]
     ref = parse_cafe_url(url)
+    aid = ref.article_id
     page = ctx.page()
     page.open(url, sel.get("frames", ["cafe_main"]))
 
     def from_json() -> dict | None:
-        if not ref.article_id:
+        """이 글의 정보 응답. 옆 글 · 인기글 목록 응답(…/articles/번호/siblings 등)은 건너뛴다."""
+        if not aid:
             return None
         for resp in page.captured_json():
-            d = find_dict(resp.data, {"articleId": ref.article_id}, ["readCount"]) or find_dict(
-                resp.data, {"id": ref.article_id}, ["readCount"]
-            )
-            if d is None and f"/articles/{ref.article_id}" in resp.url:
+            d = find_dict(resp.data, {"articleId": aid}, ["readCount"]) or find_dict(resp.data, {"id": aid}, ["readCount"])
+            if d is None and re.search(rf"/articles/{aid}(?:$|[?#])", resp.url):
                 d = find_dict(resp.data, {}, ["readCount"])
             if d:
                 return d
         return None
 
+    def likes_from_json() -> int | None:
+        if not aid:
+            return None
+        for resp in page.captured_json(lambda u: "like.naver.com" in u):
+            found = _cafe_like_count(resp.data, aid)
+            if found is not None:
+                return found
+        return None
+
     page.wait_until(lambda: page.text(sel["views"], need_digit=True) is not None or from_json() is not None)
-    # 좋아요 숫자는 늦게 붙으므로 잠깐 더 기다린다
+    # 새 카페 화면은 댓글 · 좋아요 칸을 0 으로 먼저 그려 두고 나중에 채운다.
+    # 그래서 글 정보 · 좋아요 응답을 잠깐 기다렸다가 그 숫자를 쓰고, 화면 숫자는 응답이 없을 때만 쓴다.
+    if aid and page.wait_until(lambda: from_json() is not None, timeout=min(6, ctx.settings.page_timeout)):
+        page.wait_until(lambda: likes_from_json() is not None, timeout=min(4, ctx.settings.page_timeout))
+    # 좋아요 숫자는 늦게 붙으므로 잠깐 더 기다린다 (구 화면)
     page.wait_until(lambda: page.text(sel["likes"], need_digit=True) is not None, timeout=4)
 
     values = {
@@ -341,34 +366,39 @@ def crawl_cafe_article(ctx: Context, url: str) -> RowResult:
         "nickname": page.text(sel.get("nickname", [])),
     }
 
-    def merge(d: dict | None):
+    def merge(d: dict | None) -> bool:
+        """글 정보(JSON)를 합친다. 조회 · 댓글 · 좋아요 숫자는 화면보다 JSON 을 믿는다."""
         if not d:
-            return
+            return False
         writer = d.get("writer") if isinstance(d.get("writer"), dict) else {}
         values["nickname"] = _first(
             values["nickname"], writer.get("nick"), writer.get("nickname"), writer.get("nickName"),
             d.get("writerNickname"), d.get("nickname"),
         )
         values["title"] = _first(values["title"], d.get("subject"), d.get("title"))
-        values["views"] = _first(values["views"], parse_count(d.get("readCount")))
-        values["comments"] = _first(values["comments"], parse_count(d.get("commentCount")))
+        values["views"] = _first(parse_count(d.get("readCount")), values["views"])
+        values["comments"] = _first(parse_count(d.get("commentCount")), values["comments"])
         values["likes"] = _first(
-            values["likes"], parse_count(_first(d.get("likeItCount"), d.get("likeCount"), d.get("sympathyCount")))
+            parse_count(_first(d.get("likeItCount"), d.get("likeCount"), d.get("sympathyCount"))), values["likes"]
         )
         values["date"] = _first(values["date"], _format_ts(_first(d.get("writeDateTimestamp"), d.get("writeDate"))))
+        return True
 
-    merge(from_json())
-    if any(values[k] is None for k in ("views", "comments", "likes")) and ref.article_id:
+    merged = merge(from_json())
+    values["likes"] = _first(likes_from_json(), values["likes"])
+    if not merged and aid:
+        # 응답을 못 잡았으면 글 정보 API 를 직접 부른다 (로그인 없이도 공개 글은 숫자가 나온다)
         club_id = resolve_club_id(ctx, ref, page)
         if club_id:
             data = ctx.api_json(
-                f"https://apis.naver.com/cafe-web/cafe-articleapi/v2.1/cafes/{club_id}/articles/{ref.article_id}"
+                f"https://apis.naver.com/cafe-web/cafe-articleapi/v2.1/cafes/{club_id}/articles/{aid}"
                 "?query=&useCafeId=true&requestFrom=A",
                 "https://cafe.naver.com/",
             )
-            merge(find_dict(data, {}, ["readCount"]) if data else None)
-            if values["likes"] is None and data is not None:
-                values["likes"] = parse_count(find_key(data, ["likeItCount", "likeCount"]))
+            if data is not None:
+                merge(find_dict(data, {"id": aid}, ["readCount"]) or find_dict(data, {}, ["readCount"]))
+                if values["likes"] is None:
+                    values["likes"] = parse_count(find_key(data, ["likeItCount", "likeCount"]))
 
     if any(values[k] is None for k in ("views", "comments", "likes")):
         body = page.body_text()

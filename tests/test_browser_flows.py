@@ -61,6 +61,16 @@ def test_cafe_article_iframe_and_late_like(engine):
                           "date": "2026.10.01. 12:00", "nickname": "요리왕"}
 
 
+def test_cafe_article_comment_placeholder_zero_uses_article_json(engine):
+    """화면이 댓글 · 좋아요를 0 으로 먼저 그려 둬도 응답의 숫자를 쓴다. 옆 글 응답(0)은 무시."""
+    (res,) = run(engine, "cafe_article", ["https://cafe.naver.com/slowcafe/789"])
+    assert res.status == "완료", res.message
+    assert res.values["comments"] == 2
+    assert res.values["likes"] == 1  # 화면의 숨은 0 이 아니라 좋아요 응답, 댓글 좋아요(5)는 무시
+    assert res.values["views"] == 254
+    assert res.values["nickname"] == "느림보"
+
+
 def test_cafe_article_new_layout_from_captured_json(engine):
     (res,) = run(engine, "cafe_article", ["https://cafe.naver.com/f-e/cafes/111/articles/456"])
     assert res.status == "완료", res.message
